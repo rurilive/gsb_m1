@@ -25,3 +25,11 @@
 python3 demo.py
 python3 -m unittest discover -s tests -v
 ```
+
+## 结构说明
+
+- `models.py`：`Cell`（文本/换行后的物理行，行高、宽度为派生数据）与 `Column`（序号+列宽），只管数据
+- `width.py`：宽度纯函数 `text_width`、`column_widths`，历史口径 len()；缓存放进有界 `lru_cache` 收口，不再有谁都能写的模块级 dict
+- `styles.py`：四套边框是 `STYLES` 样式表（纵向字符+角点/连接点字形+横线字符），横线由统一的 `BorderStyle.rule()` 生成
+- `pipeline.py`：统一管线 `build_grid` → `build_columns` → `render_table`；对齐集中在 `aligned_cell`，加对齐方向/颜色标记只动这里和 `Cell`
+- `render.py`：只剩对外的 `Table` 门面，构造参数/`add_row`/`render` 签名与输出字节完全不变
