@@ -54,3 +54,13 @@
 
     python3 demo.py                          # 演示：失败级联的执行报告
     python3 -m unittest discover -s tests -v # 行为基线测试
+
+## 扩展说明
+
+`Executor.plan(manifest, visitor=None)` 只产出执行计划，不执行任何模拟动作：
+与 `run` 共用同一套分层推进与阶段钩子，分层结果（层序、层内并行组成员与
+顺序）完全一致；但不读 `fail_targets`，没有失败注入与级联跳过，全部目标
+状态固定为 `plan`，耗时恒 0。返回值是 `PlanReport`（`Report` 子类），文本
+与 `run` 同源渲染：首行换成 `plan: N target(s) in M layer(s)`（不带计数与
+总耗时），目标行状态列固定 `plan`、无耗时列，层标题行与报告一致。清单校验
+与 `run` 相同，语法/重复/未知依赖/成环抛同样的异常。

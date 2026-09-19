@@ -24,8 +24,9 @@ def main():
     print(report.text)
     print("（tools 失败后，依赖它的 tests、docs 被级联跳过）")
 
-    # TODO(plan 模式): plan 能力就位后，在这里用同一份清单输出执行计划，
-    # 与上面的执行报告对照：分层与并行组一致，但不触发任何模拟动作。
+    plan = executor.plan(manifest)
+    print(plan.text)
+    print("（plan 与 run 分层一致，但只出计划：不读 fail_targets，无模拟耗时）")
 
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@
 """
 
 from .errors import BuildPlanError, GraphError, ManifestError
-from .executor import Executor, Record, Report, StageVisitor, target_cost_ms
+from .executor import Executor, PlanReport, Record, Report, StageVisitor, target_cost_ms
 from .graph import layer_targets
 from .manifest import Manifest, Target, parse_manifest
 
@@ -13,6 +13,7 @@ __all__ = [
     "GraphError",
     "ManifestError",
     "Executor",
+    "PlanReport",
     "Record",
     "Report",
     "StageVisitor",
