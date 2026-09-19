@@ -29,3 +29,15 @@
 python3 demo.py                          # 现状演示
 python3 -m unittest discover -s tests -v # 行为基线测试
 ```
+
+## 扩展说明
+
+- `unregister(plugin)`：从调用链摘除插件，幂等（不存在则静默返回），
+  只摘除、不触发任何回调；注销后重新注册排在同 priority 末尾
+- 错误隔离：钩子抛错只跳过该插件，当前 payload 原样传给下游；
+  错误按发生顺序追加进 `host.diagnostics`（`Diagnostic` 记插件名、
+  钩子名、原异常），并按 priority 触发所有在册插件的 `on_error(diag)`
+- `on_error` 里再抛错只追加 diagnostics，不二次触发
+- 轮次边界：dispatch 与 on_error 都基于开头快照，一轮内的注册/注销
+  下一轮才生效；在 on_error 里注册/注销同样安全
+- 新行为的行为契约见 `tests/test_unreg.py`

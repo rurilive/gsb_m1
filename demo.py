@@ -1,7 +1,7 @@
-"""pluginhost 现状演示：注册三个插件，跑两轮 dispatch。"""
+"""pluginhost 演示：注册三个插件跑 dispatch，再演示注销与错误隔离。"""
 
-from pluginhost import PluginHost
-from pluginhost.plugins import AuditTrail, FooterSigner, KeywordMask
+from pluginhost import Plugin, PluginHost
+from pluginhost.plugins import AuditTrail, CollapseRepeats, FooterSigner, KeywordMask
 
 
 def build_host():
@@ -31,9 +31,33 @@ def main():
     show(host, "我的密码是 123456")
     print("audit 见过的消息:", audit.seen)
 
-    # TODO(宿主改造): unregister 与错误隔离实现后，在这里补一段演示：
-    # 注销一个插件再 dispatch，展示它不再出现在链上；再注册一个
-    # on_message 会抛错的插件，展示 dispatch 不被打断、错误被记录下来。
+    print("=== 注销：mask 下线后不再参与，也不触发任何回调 ===")
+    mask = host.plugin("mask")
+    host.unregister(mask)
+    host.unregister(mask)  # 幂等：重复注销静默返回
+    show(host, "我的密码是 123456")
+
+    print("=== 错误隔离：抛错的插件只跳过自己，错误进 diagnostics ===")
+
+    class FlakyDedup(CollapseRepeats):
+        name = "flaky-dedup"
+
+        def on_message(self, message):
+            if "密码" in message:
+                raise RuntimeError("dedup 存储抖动")
+            return super().on_message(message)
+
+    class ErrorLog(Plugin):
+        name = "errlog"
+        priority = 95
+
+        def on_error(self, diag):
+            print("on_error 收到: %r" % (diag,))
+
+    host.register(FlakyDedup())
+    host.register(ErrorLog())
+    show(host, "我的密码是 123456")  # flaky-dedup 抛错，signer 照常签名
+    print("diagnostics:", host.diagnostics)
 
 
 if __name__ == "__main__":
