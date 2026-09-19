@@ -1,14 +1,14 @@
-"""mvstore 现状演示。
+"""mvstore 演示。
 
 第一段：内存模式的基本读写。
 第二段：落盘模式与重启恢复。
-文末注释：预留的事务演示位子。
+第三段：两事务写冲突演示。
 """
 
 import os
 import tempfile
 
-from mvstore.store import Store
+from mvstore.store import ConflictError, Store
 
 
 def main():
@@ -34,9 +34,20 @@ def main():
         print(f"  重启后 get('owner') -> {s2.get('owner')}")
         print(f"  重启后 get('quota') -> {s2.get('quota')}")
 
-    # TODO(事务改造): MVCC 实现后，在这里加一段两事务冲突演示：
-    # 两个事务先后 begin、读同一个 key、各自 put 后提交，
-    # 先提交者生效，后提交者抛 ConflictError，直观展示冲突检测。
+    print("\n=== 事务冲突演示 ===")
+    s3 = Store()
+    s3.put("quota", 100)
+    t1 = s3.begin()
+    t2 = s3.begin()
+    t1.put("quota", 200)
+    t2.put("quota", 300)
+    t1.commit()
+    print(f"  t1 先提交成功, get('quota') -> {s3.get('quota')}")
+    try:
+        t2.commit()
+    except ConflictError as e:
+        print(f"  t2 提交被拒: {e}")
+    print(f"  冲突后 get('quota') -> {s3.get('quota')}")
 
 
 if __name__ == "__main__":
