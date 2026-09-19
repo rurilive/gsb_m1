@@ -45,9 +45,24 @@ def unified_diff(old_text: str, new_text: str,
             elif tag == "insert":
                 for line in new_lines[bj1:bj2]:
                     body.append("+" + line)
-        if old_lines and i2 == len(old_lines) and not old_nl:
+            if tag != "insert" and old_lines and ai2 == len(old_lines) \
+                    and not old_nl:
+                body.append(NO_NEWLINE)
+            if tag != "delete" and new_lines and bj2 == len(new_lines) \
+                    and not new_nl:
+                body.append(NO_NEWLINE)
+        chunks.append(header + "\n".join(body) + "\n")
+
+    if not chunks and old_lines and old_nl != new_nl:
+        # 行内容完全一致、仅文件尾换行不同：SequenceMatcher 看不到差异，
+        # 需要为最后一行合成一个翻转换行状态的 hunk。
+        n = len(old_lines)
+        header = "@@ -{} +{} @@\n".format(_range(n, 1), _range(n, 1))
+        body = ["-" + old_lines[-1]]
+        if not old_nl:
             body.append(NO_NEWLINE)
-        if new_lines and j2 == len(new_lines) and not new_nl:
+        body.append("+" + new_lines[-1])
+        if not new_nl:
             body.append(NO_NEWLINE)
         chunks.append(header + "\n".join(body) + "\n")
 

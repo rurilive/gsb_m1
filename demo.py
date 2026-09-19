@@ -36,10 +36,14 @@ def main():
     patched = patched.replace("entry-11 = ok", "entry-11 = changed")
     p2 = unified_diff(base, patched)
     drifted = base.replace("entry-11 = ok", "entry-11 = edited")
-    result = apply_patch(drifted, p2)
-    print("apply 正常返回，未抛异常")
-    print("entry-2 是否更新:", "entry-2 = changed" in result)
-    print("entry-11 是否更新:", "entry-11 = changed" in result)
+    try:
+        result = apply_patch(drifted, p2)
+        print("apply 正常返回，未抛异常")
+        print("entry-2 是否更新:", "entry-2 = changed" in result)
+        print("entry-11 是否更新:", "entry-11 = changed" in result)
+    except ValueError as e:
+        print("apply 抛出 ValueError（基线不一致不再静默通过）:")
+        print(" ", e)
     print()
 
     # 4) 回滚
