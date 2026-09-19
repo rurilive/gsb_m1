@@ -1,10 +1,18 @@
 """LRUCache 现状演示。
 
 第一段：容量驱逐——3 个位子放 4 个 key，看谁被挤出去。
-第二段：预留的过期演示位子（见文末注释）。
+第二段：TTL 过期——注入假时钟，看过期条目的读取与清理。
 """
 
 from cachebox.cache import LRUCache
+
+
+class FakeClock:
+    def __init__(self, now=0.0):
+        self.now = now
+
+    def __call__(self):
+        return self.now
 
 
 def main():
@@ -19,9 +27,22 @@ def main():
     s = c.stats()
     print(f"  stats: hits={s['hits']} misses={s['misses']} evicted={s['evicted']}")
 
-    # TODO(过期改造): TTL 实现后，在这里加一段过期演示：
-    # 注入假时钟给部分 key 设 ttl，推进时钟后展示 get 返回未命中、
-    # purge_expired() 的清理结果，以及 stats 里 expired 计数的变化。
+    print("=== TTL 过期（注入假时钟） ===")
+    clock = FakeClock(1000.0)
+    c = LRUCache(4, clock=clock)
+    c.set("token", "abc", ttl=300)   # 5 分钟有效期
+    c.set("config", {"v": 1})        # 永不过期
+    print(f"  t=1000 get('token') -> {c.get('token')!r}")
+    clock.now = 1300.0               # 恰好到期
+    print(f"  t=1300 get('token') -> {c.get('token')!r}  # 到期即未命中")
+    c.set("tmp1", 1, ttl=10)
+    c.set("tmp2", 2, ttl=10)
+    clock.now = 1400.0
+    print(f"  purge_expired() -> 清掉 {c.purge_expired()} 条")
+    print(f"  get('config') -> {c.get('config')!r}  # 无 ttl 不受影响")
+    s = c.stats()
+    print(f"  stats: hits={s['hits']} misses={s['misses']} "
+          f"evicted={s['evicted']} expired={s['expired']}")
 
 
 if __name__ == "__main__":

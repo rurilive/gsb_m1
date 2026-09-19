@@ -29,3 +29,11 @@
 python3 demo.py                          # 容量驱逐演示
 python3 -m unittest discover -s tests -v # 行为基线测试
 ```
+
+## 实现说明
+
+- 过期判定时机：`get` 读到条目时、`purge_expired()` 调用时、以及 `set` 写入后容量超限时，统一用注入的 `clock()` 与 `expires_at` 比对（`now >= expires_at` 即过期）
+- `set(key, value, ttl=None)`：`ttl=None` 永不过期；同 key 重复 `set` 覆盖值并按新 ttl 重算过期时刻
+- 与容量驱逐的先后：`set` 后容量超限时，先过滤全部过期条目（计入 `expired`），仍超量才按 LRU 驱逐最久未使用条目（计入 `evicted`）
+- `get` 读到过期条目视同未命中：顺手删除、记一次 `misses` 和一次 `expired`
+- `expired` 记账口径：只统计因过期被清除的条目，无论由 `get`、`purge_expired()` 还是 `set` 的容量过滤触发；每条只计一次
