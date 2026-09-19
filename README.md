@@ -30,3 +30,9 @@
 python3 demo.py                          # 熔断与恢复演示
 python3 -m unittest discover -s tests -v # 行为基线测试
 ```
+
+## 实现说明
+
+- 状态转移：closed 连续失败达阈值进 open；open 冷却期满进 half-open；half-open 探测成功累计满 2 次回 closed 并清零所有计数，任一探测失败立即回 open。
+- 名额并发控制：half-open 固定 3 个探测名额，`allow_request` 在同一把锁内"检查并扣减"剩余名额，并发下不超发；回 open 时已发名额作废，再次进 half-open 重发 3 个。
+- 抖动落点：从 half-open 失败回 open 时取本次冷却 = `cooldown * (0.8 + 0.4 * r())`，`r` 默认 `random.random`、可构造注入；首次熔断按基础冷却计时，保证基线行为确定。
