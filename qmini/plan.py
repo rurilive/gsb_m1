@@ -51,6 +51,41 @@ class Compare(Predicate):
         return "%s %s %s" % (self.column, self.op, format_literal(self.value))
 
 
+class _Compound(Predicate):
+    """复合条件：若干子谓词的逻辑组合，子谓词本身可再嵌套。
+
+    eval 短路求值；render 以前缀形式打印，子谓词的嵌套在
+    explain 文本里直接可见，FilterNode 无需区分谓词种类。
+    """
+
+    keyword = ""
+
+    def __init__(self, children):
+        self.children = list(children)
+
+    def render(self):
+        return "%s(%s)" % (self.keyword,
+                           ", ".join(c.render() for c in self.children))
+
+
+class And(_Compound):
+    """逻辑与：所有子谓词为真才为真，从左到右短路。"""
+
+    keyword = "AND"
+
+    def eval(self, row):
+        return all(c.eval(row) for c in self.children)
+
+
+class Or(_Compound):
+    """逻辑或：任一子谓词为真即为真，从左到右短路。"""
+
+    keyword = "OR"
+
+    def eval(self, row):
+        return any(c.eval(row) for c in self.children)
+
+
 class PlanNode:
     """计划结点基类：可迭代，产出行 dict。
 

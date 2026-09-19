@@ -1,14 +1,15 @@
 """SQL 子集的词法与语法分析。
 
 支持：SELECT cols FROM table [WHERE cond] [ORDER BY col [ASC|DESC]] [LIMIT n]
-v1 的 cond 只有一个比较条件（col op 字面量，见 plan.Compare）。
+cond 是比较条件（col op 字面量，见 plan.Compare）经 AND/OR 与括号
+任意嵌套的布尔表达式，AND 优先级高于 OR。
 关键字大小写不敏感，表名/列名大小写敏感，保留字不能作标识符。
 语法不符抛 ParseError。
 """
 
-from qmini.plan import COMPARE_OPS, Compare
+from qmini.plan import COMPARE_OPS, And, Compare, Or
 
-_RESERVED = frozenset(["SELECT", "FROM", "WHERE", "ORDER", "BY", "ASC", "DESC", "LIMIT"])
+_RESERVED = frozenset(["SELECT", "FROM", "WHERE", "ORDER", "BY", "ASC", "DESC", "LIMIT", "AND", "OR"])
 _TWO_CHAR_OPS = (">=", "<=", "!=")
 
 
@@ -75,7 +76,7 @@ class SelectStmt:
     def __init__(self, columns, table, where, order_by, desc, limit):
         self.columns = columns    # ["*"] 或列名列表
         self.table = table
-        self.where = where        # Compare 或 None
+        self.where = where        # Predicate（Compare/And/Or）或 None
         self.order_by = order_by  # 列名或 None
         self.desc = desc
         self.limit = limit        # 非负 int 或 None
@@ -150,6 +151,36 @@ class _Parser:
         return cols
 
     def _condition(self):
+        """WHERE 表达式：OR 在最外层，AND 次之，括号可改优先级。"""
+        return self._or_expr()
+
+    def _or_expr(self):
+        node = self._and_expr()
+        terms = [node]
+        while self._at("KW", "OR"):
+            self._next()
+            terms.append(self._and_expr())
+        return terms[0] if len(terms) == 1 else Or(terms)
+
+    def _and_expr(self):
+        node = self._bool_primary()
+        terms = [node]
+        while self._at("KW", "AND"):
+            self._next()
+            terms.append(self._bool_primary())
+        return terms[0] if len(terms) == 1 else And(terms)
+
+    def _bool_primary(self):
+        if self._at("OP", "("):
+            self._next()
+            node = self._or_expr()
+            if not self._at("OP", ")"):
+                raise ParseError("条件缺少右括号")
+            self._next()
+            return node
+        return self._comparison()
+
+    def _comparison(self):
         column = self._expect_ident()
         kind, op, _ = self._next()
         if kind != "OP" or op not in COMPARE_OPS:

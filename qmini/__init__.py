@@ -6,12 +6,12 @@
 """
 
 from qmini.engine import Engine, build_plan
-from qmini.plan import (Compare, FilterNode, LimitNode, PlanNode, Predicate,
-                        ProjectNode, SeqScan, SortNode)
+from qmini.plan import (And, Compare, FilterNode, LimitNode, Or, PlanNode,
+                        Predicate, ProjectNode, SeqScan, SortNode)
 from qmini.sql import ParseError, parse
 
 __all__ = [
-    "Engine", "ParseError", "Predicate", "Compare", "PlanNode",
+    "Engine", "ParseError", "Predicate", "Compare", "And", "Or", "PlanNode",
     "SeqScan", "FilterNode", "SortNode", "ProjectNode", "LimitNode",
     "build_plan", "parse",
 ]
