@@ -16,3 +16,9 @@
 python3 demo.py
 python3 -m unittest discover -s tests -v
 ```
+
+## 结构说明
+
+- 转移表 `_TRANSITIONS`：当前状态 → 事件 → `_Transition(目标状态, guard, effect)`，查不到即非法转移。
+- 守卫是挂在转移条目上的函数（如 `_require_carrier`），`_fire` 统一入口：先查表、再跑守卫、最后跑 effect 并落轨迹。
+- 加新事件：在 `_EVENT_NAMES` 登记名字，往相关状态的子表加一行 `_Transition`，需要校验就写个守卫函数挂上；`can`/`allowed_events`/`state` 自动生效，无需改动。
