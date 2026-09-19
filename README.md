@@ -28,3 +28,12 @@
 python3 demo.py                          # 读写与恢复演示
 python3 -m unittest discover -s tests -v # 行为基线测试
 ```
+
+## 实现说明
+
+- 每个 key 维护按版本号升序的多版本链 `(version, value)`，删除写 tombstone；全局版本号每次成功提交（事务或单操作）加一。
+- `begin()` 以当前全局版本作为快照版本登记事务；事务 `get` 读快照时刻可见版本（自身缓冲写优先），`put/delete` 只落缓冲。
+- `commit()` 对写集做 first-committer-wins：任一 key 的最后提交版本晚于本事务快照即抛 `ConflictError` 并作废缓冲；否则写集以同一新版本号生效，照旧逐 key 追加 JSON 行日志。
+- `rollback()` 丢弃缓冲并注销事务。
+- `gc()` 保留各活跃事务快照可见的版本与全局最新版，其余旧版本回收；无活跃事务时每 key 只留最新版，最新版是 tombstone 则连 key 清除。
+- 重放旧格式（无 `ver`）日志时按文件序补版本号。
