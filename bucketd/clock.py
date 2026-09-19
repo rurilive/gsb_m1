@@ -16,10 +16,10 @@ class Clock(ABC):
 
 
 class SystemClock(Clock):
-    """进程默认时钟。"""
+    """进程默认时钟。用单调时钟，免疫 NTP 校时/闰秒导致的墙钟回拨。"""
 
     def time(self) -> float:
-        return _time.time()
+        return _time.monotonic()
 
     def sleep(self, seconds: float) -> None:
         _time.sleep(seconds)
