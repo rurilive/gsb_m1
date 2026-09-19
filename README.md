@@ -25,3 +25,10 @@
 python3 demo.py
 python3 -m unittest discover -s tests -v
 ```
+
+## 结构说明
+
+- `model.py`：Cell（原文/换行行块/宽度/行高）与 Column（列宽=全列最大宽），只存数据不拼字符串
+- `width.py`：`text_width` 纯函数；`cached_text_width` 是全包唯一缓存点；`wrap_text` 词间换行
+- `styles.py`：边框样式表，每套样式一组字符（top/mid/bot/v + 表头分隔方式），加样式只动这里
+- `render.py`：统一管线——建模型 → 取列宽 → 按样式表拼装；后续加对齐/颜色挂在 Cell 与样式表上即可
