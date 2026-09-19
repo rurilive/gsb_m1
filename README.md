@@ -28,3 +28,11 @@
 python3 demo.py
 python3 -m unittest discover -s tests -v
 ```
+
+## 结构说明
+
+- spec 层（`spec.py`）：`add()` 时把每个参数的 dest、action、是否取值、别名表一次定死，是全仓库唯一事实来源
+- parse 层（`parse.py`）：只消费 token 流并产出 dict，不推导元信息、不碰文本；遇 `-h` 抛 `HelpRequested`
+- render 层（`render.py`）：只读声明表渲染帮助文本，不参与解析
+- 三层经 `parser.py` 门面装配，对外 API 与输出文本不变
+- 接得住子命令：声明层可按命令挂独立 `SpecBook`，parse 层在首个位置 token 分派到对应表后照旧跑，render 层分别渲染各命令帮助，三层都不用改
