@@ -1,14 +1,16 @@
 """SQL 子集的词法与语法分析。
 
 支持：SELECT cols FROM table [WHERE cond] [ORDER BY col [ASC|DESC]] [LIMIT n]
-v1 的 cond 只有一个比较条件（col op 字面量，见 plan.Compare）。
+cond 是用 AND/OR 与括号任意嵌套的比较条件树（col op 字面量，见
+plan.Compare；AND 优先级高于 OR）。
 关键字大小写不敏感，表名/列名大小写敏感，保留字不能作标识符。
 语法不符抛 ParseError。
 """
 
-from qmini.plan import COMPARE_OPS, Compare
+from qmini.plan import COMPARE_OPS, And, Compare, Or
 
-_RESERVED = frozenset(["SELECT", "FROM", "WHERE", "ORDER", "BY", "ASC", "DESC", "LIMIT"])
+_RESERVED = frozenset(["SELECT", "FROM", "WHERE", "ORDER", "BY", "ASC", "DESC",
+                       "LIMIT", "AND", "OR"])
 _TWO_CHAR_OPS = (">=", "<=", "!=")
 
 
@@ -75,7 +77,7 @@ class SelectStmt:
     def __init__(self, columns, table, where, order_by, desc, limit):
         self.columns = columns    # ["*"] 或列名列表
         self.table = table
-        self.where = where        # Compare 或 None
+        self.where = where        # 谓词树（Compare/And/Or）或 None
         self.order_by = order_by  # 列名或 None
         self.desc = desc
         self.limit = limit        # 非负 int 或 None
@@ -111,6 +113,11 @@ class _Parser:
             raise ParseError("期望表名/列名，实际是 %r" % (val,))
         return val
 
+    def _expect_op(self, op):
+        kind, val, _ = self._next()
+        if kind != "OP" or val != op:
+            raise ParseError("期望 %r，实际是 %r" % (op, val))
+
     def parse(self):
         self._expect_kw("SELECT")
         columns = self._select_list()
@@ -119,7 +126,7 @@ class _Parser:
         where = None
         if self._at("KW", "WHERE"):
             self._next()
-            where = self._condition()
+            where = self._or_expr()
         order_by, desc = None, False
         if self._at("KW", "ORDER"):
             self._next()
@@ -149,7 +156,32 @@ class _Parser:
             cols.append(self._expect_ident())
         return cols
 
-    def _condition(self):
+    def _or_expr(self):
+        """OR 是最低优先级：or_expr := and_expr (OR and_expr)*"""
+        left = self._and_expr()
+        while self._at("KW", "OR"):
+            self._next()
+            left = Or(left, self._and_expr())
+        return left
+
+    def _and_expr(self):
+        """AND 优先级高于 OR：and_expr := primary (AND primary)*"""
+        left = self._primary()
+        while self._at("KW", "AND"):
+            self._next()
+            left = And(left, self._primary())
+        return left
+
+    def _primary(self):
+        """条件原子：括号包住的完整条件，或一个比较。"""
+        if self._at("OP", "("):
+            self._next()
+            inner = self._or_expr()
+            self._expect_op(")")
+            return inner
+        return self._comparison()
+
+    def _comparison(self):
         column = self._expect_ident()
         kind, op, _ = self._next()
         if kind != "OP" or op not in COMPARE_OPS:

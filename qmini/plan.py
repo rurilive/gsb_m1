@@ -51,6 +51,34 @@ class Compare(Predicate):
         return "%s %s %s" % (self.column, self.op, format_literal(self.value))
 
 
+class And(Predicate):
+    """合取：左右子条件都为真才放行，对应 SQL 的 AND。"""
+
+    def __init__(self, left, right):
+        self.left = left
+        self.right = right
+
+    def eval(self, row):
+        return self.left.eval(row) and self.right.eval(row)
+
+    def render(self):
+        return "(%s AND %s)" % (self.left.render(), self.right.render())
+
+
+class Or(Predicate):
+    """析取：任一子条件为真即放行，对应 SQL 的 OR。"""
+
+    def __init__(self, left, right):
+        self.left = left
+        self.right = right
+
+    def eval(self, row):
+        return self.left.eval(row) or self.right.eval(row)
+
+    def render(self):
+        return "(%s OR %s)" % (self.left.render(), self.right.render())
+
+
 class PlanNode:
     """计划结点基类：可迭代，产出行 dict。
 

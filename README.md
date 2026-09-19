@@ -44,3 +44,12 @@ Limit[n=2]
 python3 demo.py                          # 现状演示
 python3 -m unittest discover -s tests -v # 行为基线测试
 ```
+
+## 扩展说明
+
+- WHERE 支持 AND/OR 与括号任意嵌套，AND 优先级高于 OR；条件树由
+  `Compare`/`And`/`Or` 谓词结点组成，explain 以 `(a AND b)` 形式展示嵌套
+- 等值下推：WHERE 顶层是 AND 时先摊平，`列 = 字面量` 的比较单独聚成
+  一个 Filter，叠在其余条件的 Filter 之下、更靠近 SeqScan 先求值；
+  其余条件保持相对顺序，某组为空则不生成该层，OR 子树内部的 AND 不拆
+- 优化发生在 `build_plan`，explain 与执行走同一份计划
