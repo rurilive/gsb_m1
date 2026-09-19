@@ -28,3 +28,12 @@
 python3 demo.py
 python3 -m unittest discover -s tests -v
 ```
+
+## 结构说明
+
+argmini 内部分三层，`argmini/parser.py` 只做门面接线，对外签名不变：
+
+- 声明层 `argmini/spec.py`：`add()` 时把每个参数的 dest、takes_value、action 一次定死，别名推导只发生一次，注册表供 parse/render 共用。
+- 解析层 `argmini/parse.py`：只在 token 流上跑状态机，遇 `-h/--help` 抛 `HelpRequested` 信号，不拼帮助、不推 dest。
+- 渲染层 `argmini/render.py`：只读注册表拼帮助文本，不参与任何解析。
+- 为什么接得住子命令：每个子命令各自持有一个注册表，门面在 token 流头部先选注册表，再复用同一套 parse/render，无需复制任何逻辑。
