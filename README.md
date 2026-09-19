@@ -30,3 +30,13 @@
 python3 demo.py                          # 直方图演示
 python3 -m unittest discover -s tests -v # 行为基线测试
 ```
+
+## 实现说明
+
+- `window_seconds=None` 走 list 全量路径，行为不变；配置后用 deque 存 `(时间戳, 值)`。
+- 窗口判定：`now - 时间戳 <= window_seconds` 算窗口内，恰满窗口的样本保留。
+- `clock` 可注入（无参可调用对象），默认 `time.monotonic`；不另起后台线程。
+- `count`/`percentiles`/`snapshot` 惰性按当前时间过滤，不删旧样本；`observe` 顺带挤出队首旧样本。
+- `observe` 与 `compact()` 返回本次物理清理的样本数。
+- `snapshot(bucket_edges)` 要求边界严格递增，值等于边界归右桶（左闭右开），首尾各一个溢出桶。
+- 所有读写都在同一把锁内。
