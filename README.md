@@ -16,3 +16,10 @@
 python3 demo.py
 python3 -m unittest discover -s tests -v
 ```
+
+## 结构说明
+
+- 转移表 `_TRANSITIONS`：按「源状态 → 事件 → _Transition(目标状态, 守卫, 副作用)」组织，合法组合即表中有的键。
+- 守卫是挂在表项上的普通函数，签名 `(order, *args)`，不过就抛错（文案口径不变）；副作用函数负责写 `amount`/`carrier`/`receiver`。
+- 所有事件统一走 `Order._fire()`：查表 → 守卫 → 副作用 → 落状态 → 记 trail；`can()`/`allowed_events()` 只查表、不跑守卫。
+- 加新事件（如换货、部分退款）：在 `_TRANSITIONS` 相应源状态下加一行表项，需要校验就写个守卫函数挂上，再加个调 `_fire("新事件", ...)` 的事件方法即可。
