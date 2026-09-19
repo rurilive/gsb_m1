@@ -54,3 +54,13 @@
 
     python3 demo.py                          # 演示：失败级联的执行报告
     python3 -m unittest discover -s tests -v # 行为基线测试
+
+## 扩展说明
+
+- `Executor.plan(manifest, visitor=...)` 只产出执行计划，不执行任何模拟动作。
+- 与 `run` 共用同一套分层推进与 `StageVisitor` 阶段钩子，同一份清单的
+  分层结果（层序、层内并行组成员与顺序）完全一致。
+- 全部目标都是 `plan` 态、耗时计 0；不读 `fail_targets`，没有失败注入
+  与级联跳过；清单校验与 `run` 相同，原样抛 `ManifestError` / `GraphError`。
+- 计划文本与报告同源渲染：首行换 `plan: N target(s) in M layer(s)` 头
+  （不带计数与总耗时），目标行状态列固定 `plan`、无耗时列，层标题行不变。

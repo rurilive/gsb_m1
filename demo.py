@@ -24,8 +24,12 @@ def main():
     print(report.text)
     print("（tools 失败后，依赖它的 tests、docs 被级联跳过）")
 
-    # TODO(plan 模式): plan 能力就位后，在这里用同一份清单输出执行计划，
-    # 与上面的执行报告对照：分层与并行组一致，但不触发任何模拟动作。
+    # plan 对照：同一份清单、同一个 executor，只出计划不执行。
+    # 分层与并行组和上面的报告一致，但全部目标是 plan 态，
+    # 不读 fail_targets，没有失败注入与级联跳过，也没有耗时。
+    plan = executor.plan(manifest)
+    print(plan.text)
+    print("（plan 只分层不执行：无失败注入、无耗时，分层与上面报告一致）")
 
 
 if __name__ == "__main__":
