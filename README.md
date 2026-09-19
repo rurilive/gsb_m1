@@ -41,3 +41,36 @@ RFC 4648 字符表与位序。所有编解码器都是流式的：数据可以�
 ```bash
 python3 demo.py
 ```
+
+## 测试报告
+
+测试文件：`tests/test_codec.py`（标准库 unittest，可独立重复运行：
+`python3 -m unittest tests.test_codec` 或 `python3 tests/test_codec.py`）。
+共 23 个用例，16 绿 7 红，红用例上方注释均写明「README 期望 / 实际发生」。
+
+红用例与对应缺陷：
+
+1. `TestBase85Streaming.test_encode_chunk_boundary_independence`（红）——
+   `Base85Encoder.encode_feed` 用 `self._carry += buf` 累加残余，而 buf 已
+   包含旧 carry，分块喂入时旧残余被重复编码（分块收发大报文对不上的根因）。
+   修复方向：改为 `self._carry = bytearray(buf)` 整体替换。
+2. `TestBase85Encode.test_tail_padding_n3`（红）——`Base85Encoder.finish`
+   截取长度写成 `(n + 1) % 4`，尾长 n=3 时输出空串，尾部 3 字节丢失。
+   修复方向：截取长度改为 `n + 1`。
+3. `TestBase85Streaming.test_roundtrip_various_lengths`（红）——上一条缺陷
+   的连带表现：长度 ≡ 3 (mod 4) 的报文 roundtrip 后丢尾部 3 字节，
+   随缺陷 2 一并修复。
+4. `TestBase85Decode.test_whitespace_raises`（红）——`Base85Decoder.decode_feed`
+   先过滤空白再校验，违反「任何字符表外字符（含空白）必须立即抛 CodecError」。
+   修复方向：删除 `_WS` 过滤逻辑，直接逐字符校验。
+5. `TestAlphabets.test_base32_alphabet_is_rfc4648`（红）——`base32.ALPHABET`
+   为 `ABCDEFGHIJKLNMOPQRSTUVWXYZ234567`，'M' 与 'N' 位置互换。
+   修复方向：改回 RFC 4648 标准字符表 `ABCDEFGHIJKLMNOPQRSTUVWXYZ234567`。
+6. `TestBase32Encode.test_rfc4648_vectors`（红）——缺陷 5 在编码方向的表现
+   （如 `b"foo"` 编成 `NZXW6` 而非 `MZXW6`），随缺陷 5 一并修复。
+7. `TestBase32Decode.test_rfc4648_vectors`（红）——缺陷 5 在解码方向的表现，
+   随缺陷 5 一并修复。
+
+说明：Base32 自洽 roundtrip（`TestBase32Decode.test_roundtrip_various_lengths`）
+为绿，因为字符表缺陷对编解码两端对称，只有与 RFC 4648 对端互通时才暴露；
+`python3 demo.py` 所用的分块边界（8+8+2）恰好不触发缺陷 1、2，故 demo 照常通过。
