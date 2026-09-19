@@ -4,6 +4,7 @@
 见 demo.py 的统计输出。
 """
 
+import bisect
 import hashlib
 
 
@@ -55,3 +56,53 @@ class ModuloRouter(Router):
         if not self._nodes:
             raise KeyError("route on empty node list")
         return self._nodes[_hash(key) % len(self._nodes)]
+
+
+class ConsistentHashRouter(Router):
+    """一致性哈希路由。
+
+    每个物理节点按权重展开为若干个虚拟节点（默认 150 个/权重 1），
+    散列到环上；key 沿环顺时针落到第一个虚拟节点所属的物理节点。
+    增删节点只影响环上相邻区间的 key，其余 key 归属不变。
+    """
+
+    def __init__(self, nodes, replicas=150):
+        super().__init__(nodes)
+        self._replicas = replicas
+        self._weights = {}
+        self._points = []  # 环上所有虚拟节点的哈希值，升序
+        self._owners = []  # 与 _points 对齐的物理节点名
+        self._rebuild()
+
+    def set_weight(self, node, weight):
+        """调整节点权重（正整数），权重 2 的节点虚拟节点数翻倍。"""
+        if not isinstance(weight, int) or isinstance(weight, bool) or weight < 1:
+            raise ValueError("weight must be a positive integer")
+        self._weights[node] = weight
+        self._rebuild()
+
+    def add(self, node):
+        super().add(node)
+        self._rebuild()
+
+    def remove(self, node):
+        super().remove(node)
+        self._rebuild()
+
+    def _rebuild(self):
+        points = []
+        for node in self._nodes:
+            vnodes = self._replicas * self._weights.get(node, 1)
+            for i in range(vnodes):
+                points.append((_hash(f"{node}#{i}"), node))
+        points.sort()
+        self._points = [h for h, _ in points]
+        self._owners = [n for _, n in points]
+
+    def route(self, key):
+        if not self._points:
+            raise KeyError("route on empty node list")
+        idx = bisect.bisect_right(self._points, _hash(key))
+        if idx == len(self._points):
+            idx = 0  # 越过环尾，绕回起点
+        return self._owners[idx]

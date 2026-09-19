@@ -4,7 +4,7 @@
 第二段：模拟 3 -> 4 扩容，统计有多少 key 换了归属（缓存失效的直接来源）。
 """
 
-from shard.router import ModuloRouter
+from shard.router import ConsistentHashRouter, ModuloRouter
 
 NODES = ["cache-1", "cache-2", "cache-3"]
 NEW_NODE = "cache-4"
@@ -28,8 +28,13 @@ def main():
     print(f"  换归属的 key: {changed}/{total} ({changed * 100.0 / total:.1f}%)")
     print("  （扩缩容几乎全量迁移，命中率被打穿的根源）")
 
-    # TODO(扩容改造): 一致性哈希实现后，在这里用同一批 key 对比两种路由的迁移量，
-    # 直观展示新路由只迁移必要的一小部分。
+    print(f"\n=== 对比：一致性哈希扩容 {len(NODES)} -> {len(NODES) + 1} ===")
+    c1 = ConsistentHashRouter(NODES)
+    c2 = ConsistentHashRouter(NODES + [NEW_NODE])
+    changed2, total2 = migration_stats(c1, c2)
+    print(f"  换归属的 key: {changed2}/{total2} ({changed2 * 100.0 / total2:.1f}%)")
+    print(f"  取模路由迁移 {changed} 个 vs 一致性哈希迁移 {changed2} 个，"
+          f"迁移量降为原来的 {changed2 * 100.0 / changed:.1f}%")
 
 
 if __name__ == "__main__":
