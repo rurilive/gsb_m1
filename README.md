@@ -18,3 +18,28 @@ value 任意。非线程安全。构造时可传 `seed` 复现随机层级。
 ```bash
 python3 demo.py
 ```
+
+## 测试报告
+
+测试位于 `tests/test_skiplist.py`（标准库 unittest，仓库根目录运行
+`python3 -m unittest discover -s tests -v`）。共 23 个用例：15 绿、8 红。
+红用例均为源码与本 README 语义约定的出入，逐条如下（括号内为对应缺陷与建议修复方向）：
+
+- `test_max_height_scales_with_elements`、`test_random_height_distribution` 红：
+  `_random_height` 的循环条件误写为 `h > _MAX_LEVEL`（恒为 False），节点高度恒为 1，
+  跳表退化为普通链表，第 6 条分布不成立，这正是查询变慢的根源；
+  建议把条件改为 `h < _MAX_LEVEL`。
+- `test_duplicate_copies_coexist_in_insertion_order` 红：
+  `_splice` 在同键前驱处直接 `continue`，后插的同键副本从未挂上 0 层链，
+  违反第 1 条「恒新增副本」；建议去掉该跳过逻辑，让副本正常接到同键段末尾。
+- `test_len_counts_each_copy_once`、`test_len_consistent_with_range_scan_on_duplicates` 红：
+  `insert` 命中同键分支时 `_size` 多加一次，每插一个重复副本 `len()` 涨 2，
+  违反第 4 条；建议删除同键分支里多余的那次 `_size += 1`。
+- `test_remove_existing_key`、`test_remove_deletes_oldest_copy_only` 红：
+  `remove` 只摘了 1 层及以上的指针，漏摘 0 层，节点仍挂在底层链上，
+  导致删掉的键在 `range_scan`/`in` 中重新出现，违反第 2 条；
+  建议补上 0 层前驱的指针摘除。
+- `test_contains_with_none_value` 红：
+  `__contains__` 用 `find() is not None` 判断，value 为 None 的副本被漏判，
+  违反第 3 条「存在任一副本即命中」；建议改为独立判断目标节点是否存在，
+  而非依赖 value 非 None。
