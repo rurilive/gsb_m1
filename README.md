@@ -22,3 +22,13 @@
 python3 demo.py
 python3 -m unittest discover -s tests -v
 ```
+
+## 结构说明
+
+- `constants.py`：收齐魔法数与字面量（8192 行上限、CRLF、空格/tab、HTTP 前缀等），改口径只动这一处。
+- `tokenizer.py`：只懂字节不懂 HTTP，按 LF 把陆续到达的字节切成行、剥行尾 CR，行长上限在这层统一拦截。
+- `message.py`：报文组装层，`RequestAssembler` 用显式状态机推进：请求行 → 头部（含 obs-fold）→ CL/chunked body。
+- `parser.py`：对外门面，`parse_request` 签名行为不变，内部把数据一次性喂给同一个 `RequestAssembler`。
+- 状态推进在 `RequestAssembler._advance`：每次 feed 只消费当前能确定的行/字节，缺数据就停在原状态等下一段。
+- chunk 半行（如只到 `\r`）、body 不足、trailer 遇 EOF 等都按状态挂起或按历史容错收尾，不预读、不臆断。
+- 因此「一次喂完」与「逐段喂」走完全相同的代码路径，错误文本与容错口径逐字节一致，天然接得住流式解析。
