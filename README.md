@@ -30,3 +30,12 @@
 python3 demo.py                          # 现状演示
 python3 -m unittest discover -s tests -v # 行为基线测试
 ```
+
+## 幂等语义
+
+`idemkit/idempotent.py` 提供 `IdempotentSubmitter(dispatcher, store_dir, ttl, clock=time.time)`，入口 `submit(idem_key, task_name, payload)`：
+
+- 同一 `idem_key` 在 TTL 内重复提交直接返回首跑结果，handler 只执行一次
+- 结果连同键与到期时间落盘为 JSON 文件，重启后新实例指向同一 `store_dir` 即可重放
+- 并发同键只执行一次：每键一把锁加双查，其余线程等首跑结果
+- 过期条目在读写时惰性清理，无后台线程；`clock` 可注入，测试可拨快时钟验证过期重跑
