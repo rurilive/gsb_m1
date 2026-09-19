@@ -40,3 +40,28 @@
 ```bash
 python3 demo.py
 ```
+
+## 测试报告
+
+测试文件：`tests/test_machine.py`（标准库 unittest，共 24 个用例）。
+
+```bash
+python3 -m unittest tests.test_machine -v
+```
+
+当前结果：**19 绿 5 红**，5 个红用例钉出 4 处源码与本 README 的出入。
+
+| 红用例 | 对应缺陷 | 建议修复方向（一句话） |
+| --- | --- | --- |
+| `TestTransitionSelection.test_child_transition_takes_precedence_over_parent` | `Machine._pick` 按 depth 升序取第一个，父（浅）转移盖过子（深）转移，与「最具体者优先」相反。 | 改为 depth 降序（或取最大 depth）选候选。 |
+| `TestGuards.test_guard_exception_propagates_and_state_unchanged` | `fire` 用 `try/except` 吞掉守卫异常并按放行处理，异常未传播且状态被改变。 | 移除守卫调用的异常捕获，让异常原样传播（守卫在任何状态变更前执行，天然无需回滚）。 |
+| `TestFallback.test_fallback_ignored_when_candidate_exists` | `fire` 中 `self._fallbacks.get(event) or self._pick(event)` 使默认转移无条件优先于候选转移。 | 先 `_pick` 候选，候选为 None 时才回退到 `_fallbacks`。 |
+| `TestFallback.test_fallback_not_used_when_guard_rejects_candidate` | 同上根因：候选被守卫拒绝时仍走了默认转移（守卫甚至未被求值）。 | 同上：候选优先，存在候选时默认转移不参与选择。 |
+| `TestEntryExitActions.test_entry_action_exception_rolls_back` | entry 动作执行前已切换 `_state` 并写入 `history`，entry 抛异常后状态停在目标态、history 残留半完成转移。 | 先跑完 exit/entry 动作再提交状态与 history，或用 try/except 在异常时恢复旧状态并移除该次 history 记录。 |
+
+补充说明：
+
+- 异常用例均断言了异常类型（自定义 `GuardBoom`/`ActionBoom` 经 `assertRaises` 验证原样传播）与状态回滚（状态不变、`history` 不记录、exit 已执行时 entry 不再执行）。
+- `exit` 动作抛异常的场景当前行为正确（异常传播、状态未切换、无 history），已有绿用例锁定。
+- README 未约定的自由行为（如同深度同事件多候选的先后、同级多动作顺序、`can` 是否感知默认转移等）未强行钉红。
+- `fsmguard/` 源码与 `demo.py` 未做任何改动，`python3 demo.py` 照常跑通。
