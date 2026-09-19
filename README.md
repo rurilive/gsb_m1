@@ -24,3 +24,11 @@
 python3 demo.py                          # 现状演示 + 扩容迁移统计
 python3 -m unittest discover -s tests -v # 行为基线测试
 ```
+
+## 实现说明
+
+- 环由两条对齐的有序列表表示：哈希位（`bisect` 维护升序）与其归属的物理节点名。
+- 虚拟节点位置为 `md5("{node}#{replica_index}")`，默认每物理节点 150 个。
+- `route`：二分找 key 哈希顺时针第一个虚拟节点（`bisect_right`），越过环尾回到首位；环空抛 `KeyError`。
+- 权重为正整数，虚拟节点总数 = `150 × weight`；`set_weight` 按 replica 下标增量增删，可随时调整。
+- 增删节点或改权重只增删该节点对应的虚拟节点，故只有受影响环段的 key 换归属。
