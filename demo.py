@@ -4,7 +4,9 @@
 第二段：幂等提交的位子（见文件末尾注释）。
 """
 
-from idemkit import Dispatcher
+import tempfile
+
+from idemkit import Dispatcher, IdempotentSubmitter
 
 
 def render(payload):
@@ -28,9 +30,30 @@ def main():
     print(f"  watermark(cat.png) -> {r2}")
     print("  （上游是至少一次投递，同一个任务被重复提交时现在每次都会真跑一遍）")
 
-    # TODO(幂等改造): 幂等键层实现后，在这里用同一个 idem_key 重复提交
-    # 同一任务，展示第二次直接拿到首跑结果、handler 不再执行，
-    # 再演示重启进程后同键从落盘结果重放。
+    print("=== 幂等提交 ===")
+    store_dir = tempfile.mkdtemp(prefix="idemkit-demo-")
+    runs = {"render": 0}
+
+    def counted_render(payload):
+        runs["render"] += 1
+        return render(payload)
+
+    d2 = Dispatcher()
+    d2.register("render", counted_render)
+    sub = IdempotentSubmitter(d2, store_dir, ttl=3600)
+    key = "thumb-cat.png-001"
+    r3 = sub.submit(key, "render", {"name": "cat.png"})
+    print(f"  首跑            -> {r3}")
+    r4 = sub.submit(key, "render", {"name": "cat.png"})
+    print(f"  同键重复提交    -> {r4}（handler 实际执行 {runs['render']} 次）")
+
+    print("=== 重启重放 ===")
+    runs["render"] = 0
+    d3 = Dispatcher()  # 模拟进程重启：新 Dispatcher、新 Submitter，同一 store_dir
+    d3.register("render", counted_render)
+    sub2 = IdempotentSubmitter(d3, store_dir, ttl=3600)
+    r5 = sub2.submit(key, "render", {"name": "cat.png"})
+    print(f"  重启后同键提交  -> {r5}（handler 实际执行 {runs['render']} 次，结果来自落盘文件）")
 
 
 if __name__ == "__main__":
