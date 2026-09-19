@@ -22,3 +22,10 @@
 python3 demo.py
 python3 -m unittest discover -s tests -v
 ```
+
+## 结构说明
+
+- 三层分工：`constants.py` 收长度上限（8192）、CR/LF、空白与各字节字面量；`tokenizer.py` 只管按行切字节并在本层卡行长，body 字节经 `take/peek` 直取；`message.py` 把行和字节组装成 `HttpRequest`。
+- 状态推进集中在 `message.MessageReader` 的显式 state 上：`REQUEST_LINE → HEADERS → BODY_LENGTH / CHUNK_SIZE → CHUNK_DATA → CHUNK_END → CHUNK_SIZE`（0 块转 `TRAILERS → DONE`）。
+- 每步只从 tokenizer 取眼下所需的量，取不到返回 `NEED_DATA`，不假设后续数据已到齐；未取到的尾巴留在增量缓冲里等下一段。
+- 因此接得住流式：现在的 `parse_request` 是一次 `feed` 全部数据再 `finish()`；流式版改为数据到一段 `feed` 一段、反复 `pump()` 即可，解析逻辑无需改动。
