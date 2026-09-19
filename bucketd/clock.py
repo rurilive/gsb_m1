@@ -16,10 +16,14 @@ class Clock(ABC):
 
 
 class SystemClock(Clock):
-    """进程默认时钟。"""
+    """进程默认时钟。
+
+    使用单调时钟（monotonic），不受 NTP 校时/墙钟回拨影响，
+    保证限流补充逻辑看到的时间永不倒退。
+    """
 
     def time(self) -> float:
-        return _time.time()
+        return _time.monotonic()
 
     def sleep(self, seconds: float) -> None:
         _time.sleep(seconds)

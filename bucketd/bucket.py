@@ -20,7 +20,7 @@ class TokenBucket:
             raise ValueError("rate 和 burst 必须为正数")
         self.rate = float(rate)
         self.burst = float(burst)
-        self._capacity = self.rate
+        self._capacity = self.burst
         self._clock = clock if clock is not None else SystemClock()
         self._tokens = self.burst
         self._last = self._clock.time()
@@ -34,10 +34,12 @@ class TokenBucket:
 
     def try_allow(self, cost: float = 1.0) -> bool:
         """余额够扣则扣掉并返回 True，否则返回 False。"""
-        if not self._affords(cost):
-            return False
-        self._deduct(cost)
-        return True
+        with self._lock:
+            self._refill(self._clock.time())
+            if self._tokens < cost:
+                return False
+            self._tokens -= cost
+            return True
 
     def allow(self, cost: float = 1.0) -> None:
         """语义同 try_allow，余额不足时抛 RateLimitError。"""
@@ -46,20 +48,13 @@ class TokenBucket:
 
     # ---- 内部实现 ----
 
-    def _affords(self, cost: float) -> bool:
-        with self._lock:
-            self._refill(self._clock.time())
-            return self._tokens >= cost
-
-    def _deduct(self, cost: float) -> None:
-        with self._lock:
-            self._tokens -= cost
-
     def _refill(self, now: float) -> None:
         """按流逝时间补充令牌，调用方需持有锁。"""
         elapsed = now - self._last
-        if elapsed < 0:
-            self._tokens = self.burst
+        if elapsed <= 0:
+            # 时钟回拨（或原地不动）时不补充、不回扣，
+            # 只把基准点钳到当前时刻，等时钟追平后恢复正常补充。
+            self._last = now
             return
         self._tokens = min(self._capacity, self._tokens + elapsed * self.rate)
         self._last = now
