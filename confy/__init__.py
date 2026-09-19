@@ -1,4 +1,4 @@
-"""confy: 轻量配置读取。"""
+"""confy: 轻量分层配置读取。"""
 
 from confy.api import (
     MissingKeyError,
@@ -9,10 +9,22 @@ from confy.api import (
     require,
     section,
 )
-from confy.store import CONFIG, child_keys, is_branch, leaf_keys
+from confy.errors import ConfigError, ConfigErrors
+from confy.layers import (
+    child_keys,
+    is_branch,
+    leaf_keys,
+    load,
+    source_of,
+    typed,
+    validate,
+)
+from confy.store import CONFIG
 
 __all__ = [
     "CONFIG",
+    "ConfigError",
+    "ConfigErrors",
     "MissingKeyError",
     "child_keys",
     "describe",
@@ -20,7 +32,11 @@ __all__ = [
     "get",
     "is_branch",
     "leaf_keys",
+    "load",
     "missing",
     "require",
     "section",
+    "source_of",
+    "typed",
+    "validate",
 ]

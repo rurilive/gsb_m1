@@ -1,9 +1,22 @@
-"""confy 现状演示：内置单层配置的读取。
+"""confy 演示：内置单层读取 + 三层配置（默认 < JSON 文件 < 环境变量）。"""
 
-第二段注释：分层配置实现后的演示位子。
-"""
+import json
+import os
+import tempfile
 
-from confy import MissingKeyError, describe, get, missing, require, section
+from confy import (
+    ConfigErrors,
+    MissingKeyError,
+    describe,
+    get,
+    load,
+    missing,
+    require,
+    section,
+    source_of,
+    typed,
+    validate,
+)
 
 
 def main():
@@ -24,10 +37,37 @@ def main():
     absent = missing(["log.level", "mail.smtp.password"])
     print(f"  missing(['log.level', 'mail.smtp.password']) = {absent}")
 
-    # TODO(分层配置): load() 实现后，在这里补第二段演示：
-    # 默认层被 JSON 文件覆盖、再被 CONFY_ 环境变量覆盖，
-    # 并演示 typed 严格访问、validate 的 ConfigErrors 汇总、
-    # source_of 的来源追溯。
+    # 分层配置演示：默认层被 JSON 文件覆盖、再被 CONFY_ 环境变量覆盖。
+    print("\n=== 分层：默认 < JSON 文件 < 环境变量 ===")
+    fd, path = tempfile.mkstemp(suffix=".json")
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        json.dump({"db": {"pool_size": 32}, "cache": {"ttl_seconds": 30}}, fh)
+    environ = {
+        "CONFY_DB__POOL_SIZE": "64",      # 环境变量再盖一层
+        "CONFY_CACHE__ENABLED": "false",  # 推断为 bool
+        "CONFY_HTTP__REQUEST_TIMEOUT": "9.5",  # 推断为 float
+        "PATH": "/usr/bin",               # 非 CONFY_ 前缀，忽略
+    }
+    load([path], environ)
+    for key in ("db.pool_size", "cache.ttl_seconds", "cache.enabled",
+                "http.request_timeout", "app.name"):
+        print(f"  {key} = {get(key)!r}  <- {source_of(key)}")
+    os.unlink(path)
+
+    print("\n=== typed 严格访问 ===")
+    print(f"  typed('db.pool_size', int) = {typed('db.pool_size', int)}")
+    try:
+        typed("app.debug", int)  # bool 不算 int
+    except TypeError as exc:
+        print(f"  typed('app.debug', int) -> TypeError: {exc}")
+
+    print("\n=== validate 汇总校验 ===")
+    try:
+        validate({"db.pool_size": int, "app.name": int, "mail.smtp.password": str})
+    except ConfigErrors as exc:
+        print(f"  {exc}")
+        for err in exc.errors:
+            print(f"    key={err.key} reason={err.reason} layer={err.layer}")
 
 
 if __name__ == "__main__":
