@@ -13,7 +13,7 @@ _COMPARISONS = {"==", "!=", "<", "<=", ">", ">="}
 
 
 class Parser:
-    """优先级从低到高：or < and < 比较 < 加减 < 乘除 < 乘方 < 原子。"""
+    """优先级从低到高：or < and < 比较 < 加减 < 乘除 < 一元负号 < 乘方 < 原子。"""
 
     def __init__(self, tokens):
         self._tokens = tokens
@@ -59,20 +59,26 @@ class Parser:
                 return node
 
     def _mul(self):
-        node = self._power()
+        node = self._unary()
         while True:
             tok = self._peek()
             if tok.kind == "op" and tok.value in ("*", "/", "//", "%"):
                 self._advance()
-                node = ("bin", tok.value, node, self._power())
+                node = ("bin", tok.value, node, self._unary())
             else:
                 return node
+
+    def _unary(self):
+        # 一元负号优先级低于乘方：-2^2 == -(2^2) == -4，同时允许 2^-3
+        if self._match("-"):
+            return ("neg", self._unary())
+        return self._power()
 
     def _power(self):
         base = self._atom()
         if self._match("^"):
-            # 乘方右结合：2^3^2 等价 2^(3^2)
-            return ("bin", "^", base, self._power())
+            # 乘方右结合：2^3^2 等价 2^(3^2)；指数允许一元负号（2^-3）
+            return ("bin", "^", base, self._unary())
         return base
 
     def _atom(self):
@@ -88,9 +94,6 @@ class Parser:
             node = self._or()
             self._expect(")")
             return node
-        if tok.kind == "op" and tok.value == "-":
-            self._advance()
-            return ("neg", self._atom())
         if tok.kind == "keyword" and tok.value == "let":
             self._advance()
             name_tok = self._peek()
