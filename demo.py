@@ -36,8 +36,12 @@ def main():
     patched = patched.replace("entry-11 = ok", "entry-11 = changed")
     p2 = unified_diff(base, patched)
     drifted = base.replace("entry-11 = ok", "entry-11 = edited")
-    result = apply_patch(drifted, p2)
-    print("apply 正常返回，未抛异常")
+    try:
+        result = apply_patch(drifted, p2)
+        print("apply 正常返回，未抛异常")
+    except ValueError as e:
+        print("apply 报错:", e)
+        result = ""
     print("entry-2 是否更新:", "entry-2 = changed" in result)
     print("entry-11 是否更新:", "entry-11 = changed" in result)
     print()

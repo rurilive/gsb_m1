@@ -14,13 +14,22 @@ def _range(start: int, count: int) -> str:
     return f"{start},{count}"
 
 
+def _emit(body: list, prefix: str, line: str) -> None:
+    """输出一行 hunk 体；行尾无换行（即文件最后一行）时紧随其后补标记。"""
+    if line.endswith("\n"):
+        body.append(prefix + line[:-1])
+    else:
+        body.append(prefix + line)
+        body.append(NO_NEWLINE)
+
+
 def unified_diff(old_text: str, new_text: str,
                  fromfile: str = "a", tofile: str = "b", context: int = 3) -> str:
     """生成 old_text -> new_text 的 unified diff，无差异时返回空串。"""
-    old_lines = old_text.splitlines()
-    new_lines = new_text.splitlines()
-    old_nl = old_text.endswith("\n")
-    new_nl = new_text.endswith("\n")
+    # keepends=True：让"仅文件尾换行不同"也体现为最后一行的 replace，
+    # 同时保证 NO_NEWLINE 标记只可能出现在文件最后一行上。
+    old_lines = old_text.splitlines(keepends=True)
+    new_lines = new_text.splitlines(keepends=True)
 
     matcher = SequenceMatcher(a=old_lines, b=new_lines, autojunk=False)
     chunks = []
@@ -33,22 +42,18 @@ def unified_diff(old_text: str, new_text: str,
         for tag, ai1, ai2, bj1, bj2 in group:
             if tag == "equal":
                 for line in old_lines[ai1:ai2]:
-                    body.append(" " + line)
+                    _emit(body, " ", line)
             elif tag == "replace":
                 for line in old_lines[ai1:ai2]:
-                    body.append("-" + line)
+                    _emit(body, "-", line)
                 for line in new_lines[bj1:bj2]:
-                    body.append("+" + line)
+                    _emit(body, "+", line)
             elif tag == "delete":
                 for line in old_lines[ai1:ai2]:
-                    body.append("-" + line)
+                    _emit(body, "-", line)
             elif tag == "insert":
                 for line in new_lines[bj1:bj2]:
-                    body.append("+" + line)
-        if old_lines and i2 == len(old_lines) and not old_nl:
-            body.append(NO_NEWLINE)
-        if new_lines and j2 == len(new_lines) and not new_nl:
-            body.append(NO_NEWLINE)
+                    _emit(body, "+", line)
         chunks.append(header + "\n".join(body) + "\n")
 
     if not chunks:
