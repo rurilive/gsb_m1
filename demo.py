@@ -1,9 +1,22 @@
-"""confy 现状演示：内置单层配置的读取。
+"""confy 演示：内置单层读取 + 三层配置（默认 < JSON 文件 < 环境变量）。"""
 
-第二段注释：分层配置实现后的演示位子。
-"""
+import json
+import os
+import tempfile
 
-from confy import MissingKeyError, describe, get, missing, require, section
+from confy import (
+    ConfigErrors,
+    MissingKeyError,
+    describe,
+    get,
+    load,
+    missing,
+    require,
+    section,
+    source_of,
+    typed,
+    validate,
+)
 
 
 def main():
@@ -24,10 +37,42 @@ def main():
     absent = missing(["log.level", "mail.smtp.password"])
     print(f"  missing(['log.level', 'mail.smtp.password']) = {absent}")
 
-    # TODO(分层配置): load() 实现后，在这里补第二段演示：
-    # 默认层被 JSON 文件覆盖、再被 CONFY_ 环境变量覆盖，
-    # 并演示 typed 严格访问、validate 的 ConfigErrors 汇总、
-    # source_of 的来源追溯。
+    print("\n=== 分层配置：默认 < JSON 文件 < 环境变量 ===")
+    overrides = {"db.pool_size": 16, "log.level": "debug", "cache.enabled": False}
+    fh = tempfile.NamedTemporaryFile(
+        "w", suffix=".json", delete=False, encoding="utf-8"
+    )
+    json.dump(overrides, fh)
+    fh.close()
+    environ = dict(os.environ)
+    environ["CONFY_DB__POOL_SIZE"] = "32"
+    environ["CONFY_HTTP__REQUEST_TIMEOUT"] = "9.5"
+    try:
+        load(paths=[fh.name], environ=environ)
+        for key in ("db.pool_size", "log.level", "http.request_timeout", "app.name"):
+            print(f"  {key} = {get(key)!r}  (source: {source_of(key)})")
+
+        print("\n=== typed 严格访问 ===")
+        print(f"  typed('db.pool_size', int) = {typed('db.pool_size', int)}")
+        try:
+            typed("cache.enabled", int)  # bool 不算 int
+        except TypeError as exc:
+            print(f"  typed('cache.enabled', int) -> TypeError: {exc}")
+
+        print("\n=== validate 汇总 ConfigErrors ===")
+        try:
+            validate({
+                "db.pool_size": int,
+                "cache.enabled": int,        # 类型不符（file 层）
+                "mail.smtp.password": str,   # 缺失
+            })
+        except ConfigErrors as exc:
+            print(f"  ConfigErrors ({len(exc)} 项):")
+            for err in exc:
+                print(f"    - {err}")
+    finally:
+        os.unlink(fh.name)
+        load(paths=[], environ={})  # 复位为纯默认层
 
 
 if __name__ == "__main__":
