@@ -52,3 +52,14 @@
 
     python3 demo.py                          # 编译 + 三种上下文求值演示
     python3 -m unittest discover -s tests -v # 行为基线测试
+
+## 扩展说明
+
+- `regex` 操作符：`字段 regex "pattern"`，语义为 `re.search`；pattern 在
+  编译期 `re.compile` 校验，非法抛 `RuleCompileError`，位置指到 pattern
+  记号；上下文值缺失或非字符串判 miss
+- `not(表达式)` 组合器：单参数取反，与 `and`/`or` 同表注册、可任意嵌套，
+  参数个数不为 1 时编译期报错
+- 两者都走既有编译管线（`OP_TABLE` / `COMBINATOR_TABLE` + `Matcher`
+  基类），求值层无改动；describe 形如 `email regex "^.*@corp\."`、
+  `not(plan eq "free")`

@@ -29,8 +29,21 @@ def main():
             print(decision.explain())
             print(f"  （{label}）\n")
 
-    # TODO(正则规则): regex 匹配器与 not() 组合器就位后，在这里加一条用正则
-    # 圈定邮箱域的规则演示，展示命中与未命中两种解释输出。
+    # 正则圈人 + 条件取反：企业邮箱域且非免费套餐才灰度
+    regex_engine = compile_rules("""\
+flag corp-beta
+when and(email regex "^.*@corp\\.", not(plan eq free)) -> on
+default off
+""")
+    print("=== corp-beta（regex + not）===")
+    for label, ctx in [
+        ("企业邮箱付费用户", {"email": "ada@corp.example", "plan": "pro"}),
+        ("企业邮箱免费用户", {"email": "bob@corp.example", "plan": "free"}),
+        ("外部邮箱付费用户", {"email": "cat@example.com", "plan": "pro"}),
+    ]:
+        decision = regex_engine.evaluate("corp-beta", ctx)
+        print(decision.explain())
+        print(f"  （{label}）\n")
 
 
 if __name__ == "__main__":

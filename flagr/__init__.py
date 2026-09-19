@@ -8,7 +8,7 @@ from .engine import Decision, FlagEngine, FlagSpec, Rule
 from .errors import FlagrError, RuleCompileError, UnknownFlagError
 from .lexer import Token, tokenize
 from .matchers import (
-    All, Any, Compare, Contains, Equals, InSet, Matcher, NotEquals,
+    All, Any, Compare, Contains, Equals, InSet, Matcher, Not, NotEquals, Regex,
 )
 
 __all__ = [
@@ -17,5 +17,5 @@ __all__ = [
     "FlagrError", "RuleCompileError", "UnknownFlagError",
     "Token", "tokenize",
     "All", "Any", "Compare", "Contains", "Equals", "InSet", "Matcher",
-    "NotEquals",
+    "Not", "NotEquals", "Regex",
 ]

@@ -11,22 +11,28 @@ DSL 语法（一行一条语句）：
     when 表达式 -> on|off
     default on|off
 
-    表达式 := and(表达式, 表达式, ...) | or(表达式, 表达式, ...) | 子句
+    表达式 := and(表达式, 表达式, ...) | or(表达式, 表达式, ...)
+            | not(表达式) | 子句
     子句   := 字段 操作符 取值 | 字段 in [取值, 取值, ...]
-    操作符 := eq ne contains gt ge lt le in
+    操作符 := eq ne contains gt ge lt le in regex
     取值   := 带引号字符串 | 数字 | true | false | 裸词（按字符串处理）
 """
+
+import re
 
 from .engine import FlagEngine, FlagSpec, Rule
 from .errors import RuleCompileError
 from .lexer import tokenize
-from .matchers import All, Any, Compare, Contains, Equals, InSet, NotEquals
+from .matchers import (
+    All, Any, Compare, Contains, Equals, InSet, Not, NotEquals, Regex,
+)
 
 OP_TABLE = {
     "eq": Equals,
     "ne": NotEquals,
     "contains": Contains,
     "in": InSet,
+    "regex": Regex,
     "gt": lambda f, v: Compare("gt", f, v),
     "ge": lambda f, v: Compare("ge", f, v),
     "lt": lambda f, v: Compare("lt", f, v),
@@ -38,6 +44,7 @@ NUMERIC_OPS = ("gt", "ge", "lt", "le")
 COMBINATOR_TABLE = {
     "and": All,
     "or": Any,
+    "not": Not,
 }
 
 
@@ -151,7 +158,12 @@ class _Parser:
             self.next()
             children.append(self.parse_expr())
         self.expect("RPAREN", f"{kw.value}(...) 缺少右括号")
-        if len(children) < 2:
+        if kw.value == "not":
+            if len(children) != 1:
+                raise RuleCompileError(
+                    f"not 需要恰好 1 个参数，得到 {len(children)} 个",
+                    kw.line, kw.col)
+        elif len(children) < 2:
             raise RuleCompileError(
                 f"{kw.value} 至少需要 2 个参数", kw.line, kw.col)
         return combinator(children)
@@ -170,8 +182,17 @@ class _Parser:
             raise RuleCompileError(
                 f"{op_tok.value} 需要数字取值，得到 {value_tok.value!r}",
                 value_tok.line, value_tok.col)
+        if op_tok.value == "regex" and not isinstance(value, str):
+            raise RuleCompileError(
+                f"regex 需要字符串 pattern，得到 {value_tok.value!r}",
+                value_tok.line, value_tok.col)
         builder = OP_TABLE[op_tok.value]
-        return builder(field_tok.value, value)
+        try:
+            return builder(field_tok.value, value)
+        except re.error as exc:
+            raise RuleCompileError(
+                f"非法正则 {value!r}: {exc}",
+                value_tok.line, value_tok.col) from exc
 
     def parse_value_list(self):
         self.expect("LBRACK", "in 后应有 [")
