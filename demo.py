@@ -1,9 +1,11 @@
-"""verkit 现状演示。
+"""verkit 功能演示。
 
 第一段：典型版本号的解析结果。
 第二段：把依赖候选按 semver 优先级排序（含 prerelease）。
+第三段：用区间文本过滤候选并挑出 best()。
 """
 
+from verkit.range import best, match, parse_range
 from verkit.version import compare, parse_version
 
 LOCKFILE = [
@@ -36,8 +38,18 @@ def main():
     ]:
         print(f"  compare({a}, {b}) = {compare(a, b)}")
 
-    # TODO(区间支持): 实现区间匹配后，在这里用同一批候选版本演示
-    # 按区间文本过滤和 best() 挑选，直观展示哪些版本落在 ^1.2.0 || >=2.0.0 里。
+    print("\n=== 区间匹配（^1.2.0 || >=2.0.0） ===")
+    rng = parse_range("^1.2.0 || >=2.0.0")
+    for s in LOCKFILE:
+        print(f"  {s:<22} match={match(s, rng)}")
+    print(f"  best = {best(LOCKFILE, rng)}")
+
+    print("\n=== prerelease 放行（^1.4.2-beta.1） ===")
+    rng = parse_range("^1.4.2-beta.1")
+    for s in LOCKFILE:
+        if match(s, rng):
+            print(f"  {s:<22} 命中")
+    print(f"  best = {best(LOCKFILE, rng)}")
 
 
 if __name__ == "__main__":
