@@ -1,6 +1,6 @@
-"""templet 现状演示：变量、过滤器、for/if 与自动转义。"""
+"""templet 现状演示：变量、过滤器、for/if、自动转义与 include。"""
 
-from templet import Engine
+from templet import Engine, TemplateCycleError
 
 INVOICE = """\
 尊敬的 {{ customer.name }}：
@@ -19,6 +19,20 @@ PAGE = """\
 <p>{{ user_input }}</p>
 <p>{{ user_input | safe }}</p>
 """
+
+HEADER = """\
+<div class="header">{{ site_name }} · {{ page_title }}</div>"""
+
+FOOTER = """\
+<div class="footer">© 2026 {{ site_name }}（{{ page_title }}）</div>"""
+
+PAGE_SKELETON = """\
+{% include "header.html" %}
+<main>
+  <h1>{{ page_title }}</h1>
+  <p>{{ content }}</p>
+</main>
+{% include "footer.html" %}"""
 
 
 def main():
@@ -40,8 +54,23 @@ def main():
         "user_input": '<script>alert("xss")</script>',
     }))
 
-    # TODO(下个版本): include 节点落地后，在这里演示页面骨架 include
-    # 公共片段，以及 include 深度超限时 TemplateCycleError 的报错路径。
+    print("=== include：公共头部/底部，沿用同一上下文 ===")
+    page_engine = Engine()
+    page_engine.register("header.html", HEADER)
+    page_engine.register("footer.html", FOOTER)
+    print(page_engine.render_string(PAGE_SKELETON, {
+        "site_name": "橘子运营台",
+        "page_title": "活动总览",
+        "content": "本周 UV 12.3k",
+    }))
+
+    print("=== include 深度超限（直接递归）-> TemplateCycleError ===")
+    cyclic = Engine(max_include_depth=3)
+    cyclic.register("loop.html", '{% include "loop.html" %}')
+    try:
+        cyclic.render_string('{% include "loop.html" %}')
+    except TemplateCycleError as exc:
+        print("TemplateCycleError:", exc)
 
 
 if __name__ == "__main__":

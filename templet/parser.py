@@ -5,12 +5,13 @@ import re
 from templet import expr
 from templet.errors import TemplateSyntaxError
 from templet.lexer import tokenize
-from templet.nodes import ForNode, IfNode, TextNode, VarNode
+from templet.nodes import ForNode, IfNode, IncludeNode, TextNode, VarNode
 
 _FOR_RE = re.compile(
     r"for\s+([A-Za-z_][A-Za-z0-9_]*(?:\s*,\s*[A-Za-z_][A-Za-z0-9_]*)*)\s+in\s+(.+)$",
     re.S,
 )
+_INCLUDE_RE = re.compile(r'include\s+"([^"]*)"\s*$', re.S)
 
 
 def parse(source):
@@ -42,6 +43,9 @@ def _parse_block(tokens, pos, stop):
                 nodes.append(node)
             elif word == "if":
                 node, pos = _parse_if(tokens, pos)
+                nodes.append(node)
+            elif word == "include":
+                node, pos = _parse_include(tokens, pos)
                 nodes.append(node)
             else:
                 raise TemplateSyntaxError("未知标签: %r" % tok.value)
@@ -101,6 +105,15 @@ def _parse_for(tokens, pos):
     if pos >= len(tokens):
         raise TemplateSyntaxError("for 缺少 endfor")
     return ForNode(targets, m.group(2).strip(), body), pos + 1
+
+
+def _parse_include(tokens, pos):
+    body = tokens[pos].value
+    m = _INCLUDE_RE.match(body)
+    if not m:
+        raise TemplateSyntaxError(
+            "include 只接受双引号字符串字面量: %r" % body)
+    return IncludeNode(m.group(1)), pos + 1
 
 
 def _parse_if(tokens, pos):

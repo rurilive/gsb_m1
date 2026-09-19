@@ -7,3 +7,7 @@ class TemplateError(Exception):
 
 class TemplateSyntaxError(TemplateError):
     """模板源码不符合语法。"""
+
+
+class TemplateCycleError(TemplateError):
+    """include 嵌套超出深度上限（含直接/间接递归自包含）。"""
