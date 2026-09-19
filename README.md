@@ -28,3 +28,12 @@
 python3 demo.py                          # 解析与排序演示
 python3 -m unittest discover -s tests -v # 行为基线测试
 ```
+
+## 实现说明
+
+- `parse_range(text)` 按 `||` 切 OR 分支，分支内空格即 AND；`match(version, range)` 任一分支满足即可，`best(versions, range)` 取满足者中优先级最高、无则 `None`。
+- `^` 按 npm caret 展开：`^M.m.p` => `>=M.m.p <(M+1).0.0`；`M=0` 时锁 minor（`<0.(m+1).0`），`M=m=0` 时连 patch 也锁（`<0.0.(p+1)`）。
+- `~` 按 npm tilde 展开：`>=M.m.p <M.(m+1).0`，只放开 patch。
+- 缺省段先补 `.0` 再套用上述展开，如 `~1` == `~1.0.0`、`^1.2` == `^1.2.0`；裸版本（`1.2`、`1`）补零后按精确版本。
+- `1.x`/`1.2.x`/`*` 为通配（仅配合 `=`/`^`/`~`/大小比较，`!=` 只接受精确版本）；`!=` 按 semver 优先级精确排除，忽略 build。
+- prerelease 默认不匹配任何区间；仅当某 OR（AND）分支内存在与候选同一 `major.minor.patch` 且显式带 prerelease 的比较子时，该候选才被此分支放行。
