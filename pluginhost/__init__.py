@@ -4,7 +4,7 @@
 钩子。注册约定、dispatch 语义与错误行为见 README。
 """
 
-from pluginhost.host import PluginHost
+from pluginhost.host import Diagnostic, PluginHost
 from pluginhost.plugin import Plugin
 
-__all__ = ["Plugin", "PluginHost"]
+__all__ = ["Diagnostic", "Plugin", "PluginHost"]

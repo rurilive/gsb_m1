@@ -20,6 +20,13 @@ class Plugin:
     def on_registered(self, host):
         """注册完成后的生命周期回调，可以在这里保存 host 引用。"""
 
+    def on_error(self, diag):
+        """错误生命周期回调：任意插件钩子抛错后由宿主触发。
+
+        diag 是 Diagnostic（插件名、钩子名、原异常）。这里再抛错
+        只会被记入 host.diagnostics，不会二次触发 error 事件。
+        """
+
     def on_message(self, message):
         """业务钩子示例：返回替换后的消息，返回 None 表示透传原消息。"""
         return None
