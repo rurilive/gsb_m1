@@ -29,8 +29,21 @@ def main():
             print(decision.explain())
             print(f"  （{label}）\n")
 
-    # TODO(正则规则): regex 匹配器与 not() 组合器就位后，在这里加一条用正则
-    # 圈定邮箱域的规则演示，展示命中与未命中两种解释输出。
+    # 正则圈人：企业邮箱域以外的成年用户才命中
+    regex_rules = """\
+flag corp-email-gate
+when and(age ge 18, not(email regex "^.*@corp\\.")) -> on
+default off
+"""
+    engine = compile_rules(regex_rules)
+    print("=== corp-email-gate ===")
+    for label, ctx in [
+        ("外部邮箱命中", {"age": 30, "email": "ada@gmail.com"}),
+        ("企业邮箱未命中", {"age": 30, "email": "ada@corp.example"}),
+    ]:
+        decision = engine.evaluate("corp-email-gate", ctx)
+        print(decision.explain())
+        print(f"  （{label}）\n")
 
 
 if __name__ == "__main__":

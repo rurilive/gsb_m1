@@ -52,3 +52,15 @@
 
     python3 demo.py                          # 编译 + 三种上下文求值演示
     python3 -m unittest discover -s tests -v # 行为基线测试
+
+## 扩展说明
+
+下版本新增两个能力，均走现有编译管线与 Matcher 基类：
+
+- `regex` 操作符：`字段 regex "pattern"`，语义为 `re.search`；
+  编译期 `re.compile` 校验，非法模式抛 `RuleCompileError`，
+  位置指到 pattern 记号；describe 形如 `email regex "^.*@corp\."`
+- `not(表达式)` 组合器：单参数取反，与 `and`/`or` 同进
+  `COMBINATOR_TABLE`，可任意嵌套；describe 形如 `not(age ge 18)`
+
+两者均在编译期完成全部校验，求值层无新增分支。

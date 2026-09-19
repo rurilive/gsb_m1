@@ -6,6 +6,8 @@
   数字之间 int/float 互通；比较器的上下文值必须可比较（数字）
 """
 
+import re
+
 _MISSING = object()
 
 
@@ -96,6 +98,22 @@ class Contains(Matcher):
         return f"{self.field} contains {_fmt(self.value)}"
 
 
+class Regex(Matcher):
+    """字段值（转字符串后）被给定正则 re.search 命中。"""
+
+    def __init__(self, field, pattern):
+        self.field = field
+        self.pattern = pattern
+        self._compiled = re.compile(pattern)
+
+    def matches(self, ctx):
+        v = ctx.get(self.field, _MISSING)
+        return v is not _MISSING and self._compiled.search(str(v)) is not None
+
+    def describe(self):
+        return f"{self.field} regex {_fmt(self.pattern)}"
+
+
 class Compare(Matcher):
     """数字比较：gt / ge / lt / le。上下文值不是数字判 miss。"""
 
@@ -140,3 +158,16 @@ class Any(Matcher):
 
     def describe(self):
         return "or(" + ", ".join(c.describe() for c in self.children) + ")"
+
+
+class Not(Matcher):
+    """not 组合器：子条件取反。"""
+
+    def __init__(self, child):
+        self.child = child
+
+    def matches(self, ctx):
+        return not self.child.matches(ctx)
+
+    def describe(self):
+        return f"not({self.child.describe()})"
