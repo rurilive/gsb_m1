@@ -88,3 +88,17 @@ class IfNode(Node):
         branch = self.body if expr.evaluate(self.cond, ctx.resolve) else self.orelse
         for child in branch:
             child.render(out, ctx)
+
+
+class IncludeNode(Node):
+    """{% include "name.html" %}：展开引擎注册表中的命名模板。
+
+    沿用当前上下文变量（共享同一条作用域链，不新建作用域）；被包含模板
+    按自身节点规则转义，展开结果整体不再二次转义。
+    """
+
+    def __init__(self, name):
+        self.name = name
+
+    def render(self, out, ctx):
+        ctx.engine.include(self.name, ctx, out)
