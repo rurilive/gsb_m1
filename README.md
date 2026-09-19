@@ -21,3 +21,10 @@
 python3 demo.py
 python3 -m unittest discover -s tests -v
 ```
+
+## 结构说明
+
+- 读写分两层：`archlite/reader.py`（`unpack_bytes`/`read_archive`/`find_entry`，共用一个逐块扫描核心）与 `archlite/writer.py`（`pack_bytes`/`write_archive`，共用条目校验与分块产出）。
+- 头部字段偏移、块大小、魔数等常量全部收在 `archlite/header.py`，校验和是其 `checksum()` 单函数；头部拼装/解析也只有 `build_header()`/`parse_header()` 两个入口，改布局只动这一个文件。
+- `archlite/archive.py` 只是门面，负责转发，保持历史导入路径不变。
+- 错误路径分三类：输入/条目类型错误抛 `TypeError`；条目内容校验与归档格式错误（魔数/校验和/截断）抛 `ValueError`，文案逐字锁定在测试里；`find_entry` 捕获 `ValueError` 返回 `None` 的历史行为保留。
