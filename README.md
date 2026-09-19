@@ -18,3 +18,32 @@ value 任意。非线程安全。构造时可传 `seed` 复现随机层级。
 ```bash
 python3 demo.py
 ```
+
+## 测试报告
+
+测试位于 `tests/test_skiplist.py`（标准库 unittest，仓库根目录运行
+`python3 -m unittest discover -s tests -v`）。共 26 个用例，17 绿 9 红；
+全部用例显式传 seed，可独立重复运行，结果确定。红用例及对应缺陷如下：
+
+1. `test_max_height_typical_at_thousand_scale`（对应第 6、7 条）：
+   `_random_height` 的循环条件误写为 `h > _MAX_LEVEL`（应为 `h < _MAX_LEVEL`），
+   所有节点恒为 1 层，跳表退化成单链表，查询/插入/删除退化为 O(n)——
+   即"查询越跑越慢"的根源。修复方向：把循环条件改为 `h < _MAX_LEVEL`。
+2. `test_remove_last_copy_clears_contains`、`test_remove_last_copy_clears_range_scan`、
+   `test_remove_twice_second_returns_false`、`test_len_matches_range_scan_after_remove`
+   （对应第 2、4 条）：`remove` 只摘除了 1 层及以上的前驱指针，漏摘第 0 层，
+   被删节点仍挂在底层链上，于是删掉的键又被 `in`/`find`/`range_scan` 查出来，
+   且 `_size` 与链上节点数不再一致。修复方向：记录并摘除第 0 层前驱指针
+   （沿用 `_preds` 的 update 数组即可）。
+3. `test_duplicate_copies_coexist_in_insertion_order`、`test_len_counts_duplicate_copies`
+   （对应第 1、4 条）：重复键插入时，`_splice` 遇到同键前驱直接 `continue`，
+   新副本根本没接进链；同时重复分支里 `_size` 多加了一次，副本没加上、
+   计数却 +2。修复方向：`_splice` 去掉同键跳过逻辑（同键段末尾之后正常链接），
+   并删掉重复分支里多余的 `_size += 1`。
+4. `test_remove_oldest_copy_leaves_newer`（对应第 2、3 条）：上述第 2、3 两项
+   缺陷的叠加表现——最旧副本未被摘除，find 仍返回它。修复方向：随第 2、3 项
+   一并解决。
+5. `test_contains_with_none_value`（对应第 3 条）：`__contains__` 用
+   `find(...) is not None` 判断，value 为 None 的键被误判为不存在。
+   修复方向：`__contains__` 改为独立的键存在性判断（沿层找到候选节点后
+   只比较 key，不看 value）。
