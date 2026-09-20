@@ -2,16 +2,22 @@
 
 第一段：一批模拟记录并行校验，坏记录被隔离，不拖垮整批。
 第二段：后台单任务的两种用法（等待 / 回调）。
+第三段：跨线程调用链——一条链路一个 id，分段计时，收尾打印树形报告。
 """
 
 import threading
+import time
 
 from tracectx import (
     ItemFailure,
     async_call,
+    begin_chain,
+    correlation_id,
     first_failure,
     map_batch,
     run_detached,
+    set_slow_threshold,
+    span,
 )
 
 CURRENCIES = {"CNY", "USD", "EUR"}
@@ -68,9 +74,24 @@ def main():
     done.wait(5)
     t.join(5)
 
-    # TODO(调用链追踪): correlation-id 与 span 落地后，把上面这批校验
-    # 串成一条跨线程链路：一条链路一个 id，各段计时、慢段打标记，
-    # 收尾打印树形报告，能看出每条记录卡在哪一段。
+    print("\n=== 调用链追踪（一条链路一个 id，跨线程计时） ===")
+    set_slow_threshold(0.005)  # 演示用：5ms 以上算慢
+
+    def traced_verify(rec):
+        with span("verify %s" % rec["id"]):
+            if rec["id"] == "r005":
+                time.sleep(0.02)  # 模拟一条慢记录
+            return verify(rec)
+
+    with begin_chain() as chain:
+        print("  correlation-id:", correlation_id())
+        with span("verify-batch"):
+            map_batch(traced_verify, RECORDS, workers=3)
+        with span("summarize"):
+            run_detached(lambda: "ok=%d bad=%d" % (len(ok), len(bad)))
+    print("  链路报告:")
+    for line in chain.report().splitlines()[1:]:
+        print("   ", line)
 
 
 if __name__ == "__main__":
