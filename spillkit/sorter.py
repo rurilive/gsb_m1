@@ -44,6 +44,7 @@ class SortDeduper:
         os.makedirs(self._dir, exist_ok=True)
         self._buf = []
         self._seq = 0
+        self._tmp_seq = 0
         self._runs = []
         self._created = []
         self._finished = False
@@ -96,6 +97,9 @@ class SortDeduper:
     def _run_path(self, index):
         return os.path.join(self._dir, "run-%05d.run" % index)
 
+    def _merged_path(self, index):
+        return os.path.join(self._dir, "merged-%05d.run" % index)
+
     # -- 收尾 ------------------------------------------------------------
 
     def finish(self):
@@ -103,10 +107,25 @@ class SortDeduper:
         self._finished = True
         if not self._runs:
             return [record for _, record in self._sorted_dedup(self._buf)]
-        final_path = os.path.join(self._dir, "merged-00000.run")
-        self._created.append(final_path)
-        self._stats["merge_passes"] += 1
-        merge_runs(self._runs, self._key, final_path, self._guard)
+        if self._buf:
+            self._spill()
+        run_paths = self._runs
+        fan_in = self._guard.fd_limit - 1
+        while len(run_paths) > 1:
+            merged_paths = []
+            for start in range(0, len(run_paths), fan_in):
+                batch = run_paths[start:start + fan_in]
+                if len(batch) == 1:
+                    merged_paths.extend(batch)
+                    continue
+                out_path = self._merged_path(self._tmp_seq)
+                self._tmp_seq += 1
+                self._created.append(out_path)
+                self._stats["merge_passes"] += 1
+                merge_runs(batch, self._key, out_path, self._guard)
+                merged_paths.append(out_path)
+            run_paths = merged_paths
+        final_path = run_paths[0]
         out = []
         reader = RunReader(final_path, self._guard)
         try:
