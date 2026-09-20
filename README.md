@@ -33,3 +33,10 @@
 python3 demo.py                            # 选主、发租约与回收演示
 python3 -m unittest discover -s tests -v   # 行为基线测试
 ```
+
+## 批量实现说明
+
+- `batch_acquire(nodes, ttl=None, *, during=None)` 在管理器锁与成员表锁双重临界区内，先校验成员并记下 `generation()` 与节点快照，提交前再比对一次，表被增删或改优先级就抛 `BatchAborted`；非成员抛 `UnknownMember`、ttl 非正抛 `ValueError`，任何失败都整批作废、不留段落，成功时同一时钟读数整批生效
+- 原子性边界：仅覆盖“校验—提交”这一临界区；`during` 钩子（测试/演示用）在提交前触发，期间成员表的任何增删都能让本批作废
+- `compact(node)` 按起点排序，相邻、重叠或首尾相接（`start <= 上一段到期`）的段落合成一段，到期取各段最晚值，不凭空延长；有间隔的保持独立，过期段同样参与合并不丢弃
+- `batch_release(nodes)` 逐节点释放且按入参去重，真正释放的进 `released`、本来就空的进 `empty`、不在表里的进 `unknown`（即 `failures`）；已释放的立即生效不回滚，个别失败不拖停整批
