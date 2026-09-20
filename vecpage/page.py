@@ -34,6 +34,21 @@ class PageTable:
         """把 page 在 ver 版本上映射到 frame。"""
         with self._lock:
             entries = self._log.setdefault(page, [])
+            for i, (v, f) in enumerate(entries):
+                if v == ver:
+                    if f is not None and f != frame:
+                        raise MappingConflict(
+                            "page %r 在版本 %r 已映射到帧 %r，不能再映射到 %r"
+                            % (page, ver, f, frame))
+                    # 同帧重复映射是幂等操作，原样保留（含取消记录上的重映射）
+                    if f is None:
+                        entries[i] = (ver, frame)
+                    self._now = max(self._now, ver)
+                    return
+                if v > ver:
+                    entries.insert(i, (ver, frame))
+                    self._now = max(self._now, ver)
+                    return
             entries.append((ver, frame))
             self._now = max(self._now, ver)
 
@@ -43,14 +58,21 @@ class PageTable:
             entries = self._log.get(page)
             if not entries:
                 return None
-            return entries[-1][1]
+            frame = None
+            for v, f in entries:
+                if v > ver:
+                    break
+                frame = f
+            return frame
 
     def unmap(self, page):
         """取消 page 的映射，返回是否真的取消掉了。"""
         with self._lock:
-            if page not in self._log:
+            entries = self._log.get(page)
+            if not entries or entries[-1][1] is None:
                 return False
-            del self._log[page]
+            self._now += 1
+            entries.append((self._now, None))
             return True
 
     def rollback(self, ver):
@@ -62,7 +84,6 @@ class PageTable:
                 if not kept:
                     del self._log[page]
                     continue
-                kept[-1] = (kept[-1][0], entries[-1][1])
                 self._log[page] = kept
             self._now = min(self._now, ver)
 
