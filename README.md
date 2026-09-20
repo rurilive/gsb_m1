@@ -21,3 +21,11 @@
 python3 demo.py
 python3 -m unittest discover -s tests -v
 ```
+
+## 结构说明
+
+- 注册表收进 `Registry` 实例（`meters.py`），模块级函数是默认实例 `_DEFAULT` 的薄壳转发；`REGISTRY` 仍是同一 dict 的兼容别名。
+- 统计口径只有一份：`Registry.snapshot()` 排序样本、算分位（`_percentile` 最近秩法）与 min/max/avg，产出不可变 `Snapshot`。
+- 三种导出是「快照 → 渲染」：`_render_text/_render_json/_render_prom` 各自只拼字段，不再各抄一份统计逻辑，字段序契约集中在渲染层。
+- 统计口径可脱离格式化单测：直接构造 `Registry` 实例调 `snapshot()` 断言 `HistogramStats` 字段。
+- 标签维度接入点：在 `Registry` 的采集方法上加 labels 并作为注册键的一部分，快照按 (name, labels) 聚合，渲染层按既有字段序输出。
