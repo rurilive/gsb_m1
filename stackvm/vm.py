@@ -1,7 +1,17 @@
-"""虚拟机执行核心：decode -> dispatch，全局段 / 操作数栈 / 局部段。"""
+"""虚拟机执行核心：decode -> dispatch，全局段 / 操作数栈 / 调用帧局部段。"""
 
-from stackvm.errors import VmError
+from stackvm.errors import CallOverflow, VmError
 from stackvm.opcodes import BY_CODE, OPS
+
+
+class _Frame:
+    """一个调用帧：返回地址 + 与其他帧隔离的局部段。"""
+
+    __slots__ = ("return_pc", "locals")
+
+    def __init__(self, return_pc):
+        self.return_pc = return_pc
+        self.locals = {}
 
 
 class VM:
@@ -9,15 +19,20 @@ class VM:
 
     - 全局段 globals：构造时定长的槽位列表，跨 run 保留
     - 操作数栈：指令间传值，run 开始时清空
-    - 局部段 locals：按编号存取的临时变量，run 开始时清空
+    - 局部段：挂在调用帧上，按编号存取；CALL 开新帧即得到全新的、
+      与上层隔离的局部段，RET 销毁当前帧
+
+    调用栈深度上限由 max_call_depth 控制（不含主程序帧），CALL 超限
+    抛 CallOverflow。
     """
 
-    def __init__(self, globals_size=16, max_steps=100000):
+    def __init__(self, globals_size=16, max_steps=100000, max_call_depth=64):
         self.globals = [0] * globals_size
         self.max_steps = max_steps
+        self.max_call_depth = max_call_depth
         self.output = []
         self._stack = []
-        self._locals = {}
+        self._frames = []
         self._pc = 0
         self._prog = b""
         # 分发表由编码表驱动：每个操作码对应一个 _op_<小写名称> 方法
@@ -30,7 +45,7 @@ class VM:
         """
         self._prog = program
         self._stack = []
-        self._locals = {}
+        self._frames = [_Frame(None)]  # 主程序帧：return_pc=None
         self.output = []
         self._pc = 0
         steps = 0
@@ -118,13 +133,26 @@ class VM:
         self._check_slot(arg)
         self.globals[arg] = self._pop()
 
-    def _op_load_local(self, arg):
-        if arg not in self._locals:
-            raise VmError("读取未初始化的局部变量 %d" % arg)
-        self._stack.append(self._locals[arg])
-
     def _op_store_local(self, arg):
-        self._locals[arg] = self._pop()
+        self._frames[-1].locals[arg] = self._pop()
+
+    def _op_load_local(self, arg):
+        frame_locals = self._frames[-1].locals
+        if arg not in frame_locals:
+            raise VmError("读取未初始化的局部变量 %d" % arg)
+        self._stack.append(frame_locals[arg])
+
+    def _op_call(self, arg):
+        if len(self._frames) > self.max_call_depth:
+            raise CallOverflow("调用栈深度超过上限 %d" % self.max_call_depth)
+        self._frames.append(_Frame(self._pc))  # self._pc 已是 CALL 下一条指令偏移
+        self._pc = arg
+
+    def _op_ret(self, arg):
+        if len(self._frames) <= 1:
+            raise VmError("主程序帧不能 RET")
+        frame = self._frames.pop()
+        self._pc = frame.return_pc
 
     def _op_print(self, arg):
         self.output.append(str(self._pop()))
