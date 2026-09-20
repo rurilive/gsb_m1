@@ -29,6 +29,36 @@ class NoLease(LeaseError):
         self.node = node
 
 
+class MembershipChanged(LeaseError):
+    """批量操作期间成员表被增删过，整批不生效。"""
+
+    def __init__(self, before, after):
+        super().__init__(
+            "membership changed during batch operation (generation %d -> %d)"
+            % (before, after)
+        )
+        self.before = before
+        self.after = after
+
+
+class BatchReleaseResult:
+    """批量释放的逐节点结果。
+
+    released: 本次确实清掉了租约的节点。
+    empty: 在表里但本来就没持有租约的节点。
+    unknown: 不在成员表里的节点。
+    """
+
+    def __init__(self, released=(), empty=(), unknown=()):
+        self.released = list(released)
+        self.empty = list(empty)
+        self.unknown = list(unknown)
+
+    def __repr__(self):
+        return ("BatchReleaseResult(released=%r, empty=%r, unknown=%r)"
+                % (self.released, self.empty, self.unknown))
+
+
 class MemberTable:
     """成员表：节点名到优先级，增删都会让代数加一。
 
@@ -145,6 +175,81 @@ class LeaseManager:
         with self._lock:
             self._require_member(node)
             return self._segments.pop(node, None) is not None
+
+    def merge(self, node):
+        """合并节点手上相邻、重叠或首尾相接的段落，返回合并后的快照。
+
+        按起点排序后，下一段起点不晚于当前段到期时刻（含相等）即并为一段；
+        合并段的到期时刻取被并入各段里最晚的，不会凭空变长。
+        """
+        with self._lock:
+            self._require_member(node)
+            merged = []
+            for start, end in sorted(self._segments.get(node, [])):
+                if merged and start <= merged[-1][1]:
+                    if end > merged[-1][1]:
+                        merged[-1][1] = end
+                else:
+                    merged.append([start, end])
+            if merged:
+                self._segments[node] = merged
+            else:
+                self._segments.pop(node, None)
+            return [(s, e) for s, e in merged]
+
+    def acquire_batch(self, nodes, ttl=None):
+        """原子地给一组节点各发一段租约，返回 {节点: 到期时刻}。
+
+        任何一个节点不是成员、ttl 非法、节点重复，或申请过程中成员表
+        被增删过，整批作废：不留下任何一段新租约。
+        """
+        ttl = self._default_ttl if ttl is None else ttl
+        if ttl <= 0:
+            raise ValueError("ttl must be positive")
+        targets = list(nodes)
+        if len(set(targets)) != len(targets):
+            raise ValueError("duplicate nodes in batch")
+        with self._lock:
+            before = self._table.generation()
+            for node in targets:
+                self._require_member(node)
+            now = self._clock()
+            if self._table.generation() != before:
+                raise MembershipChanged(before, self._table.generation())
+            end = now + ttl
+            added = {node: [now, end] for node in targets}
+            for node, segment in added.items():
+                self._segments.setdefault(node, []).append(segment)
+            after = self._table.generation()
+            if after != before:
+                for node, segment in added.items():
+                    segs = self._segments.get(node)
+                    if segs is not None:
+                        try:
+                            segs.remove(segment)
+                        except ValueError:
+                            pass
+                        if not segs:
+                            del self._segments[node]
+                raise MembershipChanged(before, after)
+            return {node: end for node in targets}
+
+    def release_batch(self, nodes):
+        """逐节点释放，个别失败不拖停整批，返回 BatchReleaseResult。
+
+        已经释放成功的节点不会因为后面的节点出错而回滚；不在成员表的
+        节点记到 unknown，在表里但本来就空着的记到 empty。
+        """
+        result = BatchReleaseResult()
+        for node in dict.fromkeys(nodes):
+            try:
+                if self.release(node):
+                    result.released.append(node)
+                else:
+                    result.empty.append(node)
+            except UnknownMember:
+                result.unknown.append(node)
+        return result
 
     def segments(self, node):
         """节点手上的租约段落快照，每段是 (起点, 到期时刻)。"""

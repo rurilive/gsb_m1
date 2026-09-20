@@ -33,3 +33,11 @@
 python3 demo.py                            # 选主、发租约与回收演示
 python3 -m unittest discover -s tests -v   # 行为基线测试
 ```
+
+## 实现说明
+
+- `acquire_batch(nodes, ttl=None)`：读钟前后两次比对 `generation()`，中途成员表被增删或任何节点非成员、ttl 非法、节点重复，都不落任何一段，已写入的会回滚，抛 `MembershipChanged`。
+- 原子性边界：整批评判、写入、复核都在管理器同一把锁内；成员表变更以代数为准，开批前已落定的变更不影响本批。
+- `merge(node)`：段落按起点排序，下一段起点 `<=` 当前段到期（首尾相接也算）即并入，合并段到期取各段最晚值，有间隔的不并，到期时刻不会变长。
+- `release_batch(nodes)`：逐节点释放不互相拖停，结果用 `BatchReleaseResult` 分记 `released` / `empty`（在表但本来空）/ `unknown`（非成员）。
+- 已成功的释放不随后续失败回滚；重复节点只计一次；以上新方法均复用注入 clock 与现有锁，基线方法行为不变。
