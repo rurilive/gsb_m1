@@ -33,6 +33,7 @@ class Scheduler:
         self._tasks: dict[str, Task] = {}
         self._inflight: set[str] = set()
         self._queue: "queue.Queue[tuple[str, int]]" = queue.Queue()
+        self._gen_seq = 0
         self._lock = threading.RLock()
         self._stopping = False
         self._threads: list[threading.Thread] = []
@@ -43,11 +44,15 @@ class Scheduler:
             if task_id in self._tasks:
                 raise ValueError(f"task 已存在: {task_id}")
             nxt = trigger.next_after(self._clock.now())
-            self._tasks[task_id] = Task(task_id, trigger, fn, nxt, paused)
+            task = Task(task_id, trigger, fn, nxt, paused)
+            self._gen_seq += 1
+            task.generation = self._gen_seq
+            self._tasks[task_id] = task
 
     def remove(self, task_id: str) -> None:
         with self._lock:
             self._tasks.pop(task_id, None)
+            self._inflight.discard(task_id)
 
     def pause(self, task_id: str) -> None:
         with self._lock:
@@ -55,7 +60,8 @@ class Scheduler:
             if task is None:
                 raise KeyError(task_id)
             task.paused = True
-            task.generation += 1
+            self._gen_seq += 1
+            task.generation = self._gen_seq
 
     def resume(self, task_id: str) -> None:
         with self._lock:
@@ -63,7 +69,8 @@ class Scheduler:
             if task is None:
                 raise KeyError(task_id)
             task.paused = False
-            task.generation += 1
+            self._gen_seq += 1
+            task.generation = self._gen_seq
 
     def get(self, task_id: str) -> Task | None:
         with self._lock:
@@ -120,20 +127,22 @@ class Scheduler:
                         continue
                     if task.next_run <= now:
                         late = (now - task.next_run).total_seconds()
-                        if late >= self._misfire_grace:
+                        if late < self._misfire_grace:
                             self._inflight.add(task.id)
                             self._queue.put((task.id, task.generation))
-                        task.next_run = task.trigger.next_after(task.next_run)
+                        task.next_run = task.trigger.next_after(now)
             self._clock.sleep(self._tick)
 
     def _worker(self) -> None:
         while not self._stopping:
             try:
-                task_id, _gen = self._queue.get(timeout=0.05)
+                task_id, gen = self._queue.get(timeout=0.05)
             except queue.Empty:
                 continue
             with self._lock:
                 task = self._tasks.get(task_id)
                 self._inflight.discard(task_id)
-            if task is not None:
-                task.fn()
+                if task is None or task.paused or task.generation != gen:
+                    continue
+                fn = task.fn
+            fn()

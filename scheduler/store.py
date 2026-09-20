@@ -1,10 +1,7 @@
-"""任务表持久化：JSON 快照，保存 next_run 与 paused，供进程重启恢复。"""
+"""任务表持久化：JSON 快照，保存 next_run（UTC，带时区）与 paused，供进程重启恢复。"""
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from zoneinfo import ZoneInfo
-
-_LOCAL_TZ = ZoneInfo("Asia/Hong_Kong")
 
 
 def _dump_trigger(trigger) -> dict:
@@ -42,7 +39,8 @@ class Store:
             payload.append({
                 "id": task.id,
                 "trigger": _dump_trigger(task.trigger),
-                "next_run": task.next_run.astimezone(_LOCAL_TZ).replace(tzinfo=None).isoformat(),
+                "next_run": task.next_run.astimezone(timezone.utc).isoformat(),
+                "paused": task.paused,
             })
         Path(path).write_text(json.dumps(payload, ensure_ascii=False, indent=1))
 
@@ -58,5 +56,6 @@ class Store:
                 next_run = next_run.replace(tzinfo=timezone.utc)
             else:
                 next_run = next_run.astimezone(timezone.utc)
-            out[item["id"]] = Task(item["id"], trigger, lambda: None, next_run)
+            out[item["id"]] = Task(item["id"], trigger, lambda: None, next_run,
+                                   paused=item.get("paused", False))
         return out

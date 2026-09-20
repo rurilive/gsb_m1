@@ -47,7 +47,7 @@ class DailyTrigger(Trigger):
         local = t.astimezone(self.tz)
         nxt = local.replace(hour=self.hour, minute=self.minute, second=0, microsecond=0)
         if nxt <= local:
-            nxt = (nxt.astimezone(timezone.utc) + timedelta(days=1)).astimezone(self.tz)
+            nxt = nxt + timedelta(days=1)
         return nxt.astimezone(timezone.utc)
 
 
@@ -66,12 +66,12 @@ class MonthlyTrigger(Trigger):
         y, m = local.year, local.month
         while True:
             last = calendar.monthrange(y, m)[1]
-            day = min(self.day, last)
-            cand = local.replace(year=y, month=m, day=day,
-                                 hour=self.hour, minute=self.minute,
-                                 second=0, microsecond=0)
-            if cand > local:
-                return cand.astimezone(timezone.utc)
+            if self.day <= last:
+                cand = local.replace(year=y, month=m, day=self.day,
+                                     hour=self.hour, minute=self.minute,
+                                     second=0, microsecond=0)
+                if cand > local:
+                    return cand.astimezone(timezone.utc)
             m += 1
             if m == 13:
                 m, y = 1, y + 1
