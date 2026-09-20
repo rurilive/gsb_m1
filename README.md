@@ -16,3 +16,10 @@
 python3 demo.py
 python3 -m unittest discover -s tests -v
 ```
+
+## 结构说明
+
+- 表驱动：`_TRANSITIONS` 是「事件 → {源状态: 目标状态}」的转移表，唯一状态字段是 `_state`，所有事件统一走 `_fire()` 查表。
+- 守卫挂在 `_GUARDS`（事件 → 函数），状态检查通过后执行；参数落库的副作用挂在 `_ACTIONS`。
+- `_EVENTS` 决定 `allowed_events()` 的输出顺序；六个 `_xxx` 旗标仅兼容保留，逻辑不读。
+- 加事件（如「换货」「部分退款」）：在 `_EVENTS` 末尾加名字，`_TRANSITIONS` 加一行源状态映射，按需补 `_GUARDS`/`_ACTIONS`/`_FLAG_BY_EVENT` 各一条即可。
