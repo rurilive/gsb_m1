@@ -26,3 +26,12 @@
 python3 demo.py                          # 手动检查演示
 python3 -m unittest discover -s tests -v # 行为基线测试
 ```
+
+## 就绪语义
+
+- 整体状态三档：全部探针通过为 `ok`；通过数达到门限 `k` 但没全过为 `degraded`；低于 `k`（或首轮之前）为 `down`。
+- `status()` 回答「健不健康」，`ready()` 回答「能不能接流量」：通过探针数 `>= k` 即可接流量，所以 `degraded` 通常仍接流，`down` 摘流。
+- `register(name, fn, timeout=秒)`：探针超时未返回直接判失败，不再拖死整轮。
+- `start()`/`stop()` 起停后台自检线程，每轮间隔在 `[period-jitter, period+jitter]` 间抖动，时钟可注入。
+- `on_change(fn)` 在整体状态翻转时由检查线程回调 `fn(old, new)`，回调抛错只记录、不中断检查。
+- `snapshot()`、`status()`、`ready()` 均线程安全，读端点可与检查线程并发调用。
