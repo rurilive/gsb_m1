@@ -1,3 +1,17 @@
-from .pool import QuotaExceeded, QuotaPool
+from .pool import (
+    QuotaExceeded,
+    QuotaPool,
+    Reservation,
+    ReservationError,
+    ReservationExpired,
+    ReservationNotFound,
+)
 
-__all__ = ["QuotaExceeded", "QuotaPool"]
+__all__ = [
+    "QuotaExceeded",
+    "QuotaPool",
+    "Reservation",
+    "ReservationError",
+    "ReservationExpired",
+    "ReservationNotFound",
+]
