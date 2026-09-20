@@ -32,3 +32,10 @@
 python3 demo.py                          # 写入压实与逐层查找演示
 python3 -m unittest discover -s tests -v # 行为基线测试
 ```
+
+## 实现说明
+
+- 每层挂一个 `blooms.bloom.BloomFilter`（SHA1 双哈希），容量按该层条目上限建；`get` 先问过滤器，说没有就 `filter_skips` 加一整层跳过，说可能有才穿透扫 dict 计 `filter_probes`，命中提前停。
+- 压实合并后源层与目标层的旧位数组都作废：源层重置、目标层用合并后键集全量重建，键集变了绝不沿用旧数组，杜绝假阴。
+- `stats()` 另报目标 `error_rate` 和表级估算误判率（各层按当前条目数套 `(1-e^(-kn/m))^k` 后的联合值），每层明细在 `filter_stats()`；实际条目超容量时 `saturated=True`，`BloomFilter.rebuild(keys)` 容量翻倍重建把误判率压回来，`put` 路径自动触发。
+- 落盘为单个 JSON：magic/version、构造参数、各层 `[key, value]` 列表、计数器、每层过滤器的参数与十六进制位数组；`load` 校验位数组与参数一致、过滤器条目数与层内容一致，读回后行为与统计与存盘前相同。
