@@ -1,6 +1,6 @@
-"""stackvm 现状演示：汇编 -> 反汇编 -> 执行。"""
+"""stackvm 演示：汇编 -> 反汇编 -> 执行，含 CALL/RET 递归子程序。"""
 
-from stackvm import VM, assemble, disasm
+from stackvm import CallOverflow, VM, assemble, disasm
 
 SUM10 = """
 # 求 1+2+...+10，结果存全局段 0 号槽
@@ -45,6 +45,30 @@ PRINT
 HALT
 """
 
+# 递归 fib：入口时栈顶为参数 n，返回时栈顶为 fib(n)。
+# n 存进本帧局部段 0，每层调用帧的局部段相互隔离。
+FIB = """
+fib:
+STORE_LOCAL 0      # 本帧的 n
+LOAD_LOCAL 0
+PUSH 2
+LT                 # n < 2 ?
+JZ rec
+LOAD_LOCAL 0       # 基例：fib(n) = n
+RET
+rec:
+LOAD_LOCAL 0
+PUSH 2
+SUB
+CALL fib           # 压栈 fib(n-2)
+LOAD_LOCAL 0
+PUSH 1
+SUB
+CALL fib           # 压栈 fib(n-1)
+ADD
+RET
+"""
+
 
 def main():
     print("=== SUM10 反汇编（前 6 行） ===")
@@ -58,8 +82,19 @@ def main():
     print("\n=== 执行 ORDER（局部段用法） ===")
     print("  output:", VM().run(assemble(ORDER)))
 
-    # TODO(下个版本): CALL/RET 落地后，在这里加一段递归程序（比如 fib），
-    # 演示调用帧、局部段隔离与调用栈深度上限的报错路径。
+    print("\n=== CALL/RET：递归 fib(10) ===")
+    fib_code = assemble("PUSH 10\nCALL fib\nPRINT\nHALT\n" + FIB)
+    call_ret = [line for line in disasm(fib_code).splitlines()
+                if "CALL" in line or "RET" in line]
+    print("  反汇编片段:", call_ret[0], "/", call_ret[-1])
+    print("  output:", VM().run(fib_code))
+
+    print("\n=== 调用栈深度上限：max_calls=10 时递归 fib(20) ===")
+    deep = assemble("PUSH 20\nCALL fib\nPOP\nHALT\n" + FIB)
+    try:
+        VM(max_calls=10).run(deep)
+    except CallOverflow as exc:
+        print("  捕获 CallOverflow(VmError 子类):", exc)
 
 
 if __name__ == "__main__":

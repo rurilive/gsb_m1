@@ -1,6 +1,6 @@
 """虚拟机执行核心：decode -> dispatch，全局段 / 操作数栈 / 局部段。"""
 
-from stackvm.errors import VmError
+from stackvm.errors import CallOverflow, VmError
 from stackvm.opcodes import BY_CODE, OPS
 
 
@@ -9,15 +9,20 @@ class VM:
 
     - 全局段 globals：构造时定长的槽位列表，跨 run 保留
     - 操作数栈：指令间传值，run 开始时清空
-    - 局部段 locals：按编号存取的临时变量，run 开始时清空
+    - 局部段 locals：按编号存取的临时变量，随调用帧隔离，run 开始时清空
+
+    调用帧由 CALL 压入、RET 弹出，帧内保存 (返回地址, 上层局部段)；
+    帧的数量（不含主程序帧）上限为 max_calls。
     """
 
-    def __init__(self, globals_size=16, max_steps=100000):
+    def __init__(self, globals_size=16, max_steps=100000, max_calls=64):
         self.globals = [0] * globals_size
         self.max_steps = max_steps
+        self.max_calls = max_calls
         self.output = []
         self._stack = []
         self._locals = {}
+        self._frames = []  # 每项为 [返回地址, 上层局部段]，空栈表示在主程序段
         self._pc = 0
         self._prog = b""
         # 分发表由编码表驱动：每个操作码对应一个 _op_<小写名称> 方法
@@ -31,6 +36,7 @@ class VM:
         self._prog = program
         self._stack = []
         self._locals = {}
+        self._frames = []
         self.output = []
         self._pc = 0
         steps = 0
@@ -105,6 +111,19 @@ class VM:
     def _op_jz(self, arg):
         if not self._pop():
             self._pc = arg
+
+    def _op_call(self, arg):
+        if len(self._frames) >= self.max_calls:
+            raise CallOverflow("调用栈深度超过上限 %d" % self.max_calls)
+        # self._pc 已在 decode 后指向 CALL 的下一条指令，即返回地址
+        self._frames.append([self._pc, self._locals])
+        self._locals = {}
+        self._pc = arg
+
+    def _op_ret(self, arg):
+        if not self._frames:
+            raise VmError("主程序段不能执行 RET")
+        self._pc, self._locals = self._frames.pop()
 
     def _check_slot(self, arg):
         if not 0 <= arg < len(self.globals):
