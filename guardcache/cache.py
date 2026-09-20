@@ -1,8 +1,11 @@
 """进程内多级缓存，带加载函数回填。
 
 命中直接返回，未命中调用 loader 回填并把结果写进缓存；主层条目带存活
-时间（TTL），超出容量按 LRU 驱逐；loader 报不存在时记入负缓存。纯标准
-库实现，时间读取统一走注入的 clock。
+时间（TTL，写入时一次性算好，读取不续期），超出容量按 LRU 驱逐，驱逐
+时优先挤掉正条目、保护负条目；loader 报不存在时记入负缓存，回源报其它
+异常时不写任何条目。同一个 key 的并发未命中只放一个 loader 出去，其余
+请求等同一趟结果，避免惊群和慢请求旧值覆盖。纯标准库实现，时间读取
+统一走注入的 clock。
 """
 
 import threading
@@ -39,6 +42,17 @@ class _Entry:
         self.expires_at = expires_at
 
 
+class _Flight:
+    """同一个 key 正在回源时的共享航班：并发未命中只跑一个 loader。"""
+
+    __slots__ = ("event", "value", "error")
+
+    def __init__(self):
+        self.event = threading.Event()
+        self.value = None
+        self.error = None
+
+
 class GuardCache:
     """两级缓存 + 回源加载。
 
@@ -64,6 +78,7 @@ class GuardCache:
         self._lock = threading.Lock()
         self._main = OrderedDict()   # key -> _Entry，主层
         self._hot = OrderedDict()    # key -> _Entry，热层，与主层共享同一对象
+        self._inflight = {}          # key -> _Flight，回源中的 key
         self._hits = 0
         self._misses = 0
         self._loads = 0
@@ -81,25 +96,37 @@ class GuardCache:
                     self._hot.move_to_end(key)
                     if key in self._main:
                         self._main.move_to_end(key)
-                    entry.expires_at = self._fresh_expiry(entry.value)
                     self._hits += 1
                     if entry.value is _MISSING:
                         raise NotFound(key)
                     return entry.value
-                del self._hot[key]
+                self._hot.pop(key, None)
             entry = self._main.get(key)
             if entry is not None:
                 if not self._expired(entry):
                     self._main.move_to_end(key)
-                    entry.expires_at = self._fresh_expiry(entry.value)
                     self._promote(key, entry)
                     self._hits += 1
                     if entry.value is _MISSING:
                         raise NotFound(key)
                     return entry.value
-                del self._main[key]
+                self._main.pop(key, None)
             self._misses += 1
-        return self._load(key)
+            flight = self._inflight.get(key)
+            if flight is None:
+                # 本趟回源由当前请求领头，其它同 key 的未命中搭航班
+                flight = _Flight()
+                self._inflight[key] = flight
+                leader = True
+                self._loads += 1
+            else:
+                leader = False
+        if not leader:
+            flight.event.wait()
+            if flight.error is not None:
+                raise flight.error
+            return flight.value
+        return self._load(key, flight)
 
     def invalidate(self, key):
         """删除该 key 的正/负缓存条目，返回是否真的删掉了。"""
@@ -122,23 +149,36 @@ class GuardCache:
 
     # -- 内部实现 --
 
-    def _load(self, key):
-        """回源加载。调用时不在持锁状态，loader 可以慢慢跑。"""
-        with self._lock:
-            self._loads += 1
+    def _load(self, key, flight):
+        """领头回源。调用时不在持锁状态，loader 可以慢慢跑。
+
+        结果（值或异常）发布到航班上，等待中的同 key 请求共享同一趟
+        结果。只有成功和 NotFound 会写缓存；其它异常不留下任何条目，
+        下次 get 自然重新回源，不会把坏值钉在缓存里。
+        """
         try:
             value = self._loader(key)
-        except NotFound:
+        except NotFound as exc:
             self._remember(key, _MISSING)
             with self._lock:
                 self._negatives += 1
-            raise
-        except Exception:
-            # 回源抖动时先占个位，省得同一个 key 后面反复打下游
-            self._remember(key, None)
-            raise
-        self._remember(key, value)
-        return value
+            flight.error = exc
+        except Exception as exc:
+            flight.error = exc
+        else:
+            self._remember(key, value)
+            flight.value = value
+        finally:
+            with self._lock:
+                # 先放行等待者再摘除航班：成功时缓存已在 _remember 里
+                # 落盘，失败时航班还在字典里，新来的请求只会搭旧航班，
+                # 不会在这个缝隙里重复回源
+                flight.event.set()
+                if self._inflight.get(key) is flight:
+                    del self._inflight[key]
+        if flight.error is not None:
+            raise flight.error
+        return flight.value
 
     def _remember(self, key, value):
         with self._lock:
@@ -147,7 +187,7 @@ class GuardCache:
             self._main[key] = entry
             self._promote(key, entry)
             while len(self._main) > self._capacity:
-                evicted_key, _ = self._main.popitem(last=False)
+                evicted_key = self._evict_lru(self._main)
                 self._hot.pop(evicted_key, None)
                 self._evicted += 1
 
@@ -156,7 +196,26 @@ class GuardCache:
         self._hot.pop(key, None)
         self._hot[key] = entry
         while len(self._hot) > self._hot_capacity:
-            self._hot.popitem(last=False)
+            self._evict_lru(self._hot)
+
+    @staticmethod
+    def _evict_lru(layer):
+        """按 LRU 选一个牺牲者并驱逐，返回它的 key。
+
+        负条目是“确认不存在”的占位，被挤掉后同一个幽灵 key 又会反复
+        打下游，所以驱逐时先挑最久未用的正条目；整层全是负条目时才
+        退回最旧的负条目。调用时需持有锁。
+        """
+        victim = None
+        for candidate, entry in layer.items():
+            if entry.value is not _MISSING:
+                victim = candidate
+                break
+        if victim is None:
+            victim, _ = layer.popitem(last=False)
+        else:
+            layer.pop(victim)
+        return victim
 
     def _fresh_expiry(self, value):
         ttl = self._negative_ttl if value is _MISSING else self._ttl

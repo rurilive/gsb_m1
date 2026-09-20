@@ -1,10 +1,10 @@
-"""guardcache 现状演示：缓存被污染后长期返回错误结果的几类现象。
+"""guardcache 行为演示：四类缓存故障修复后的正确表现。
 
-逐段演示四个现象，输出里的 loader 调用次数是关键：
-  1. 回源异常后缓存里被写进坏值，之后一直命中
-  2. 同 key 并发未命中，多个 loader 同时跑，旧值覆盖新值
-  3. 热 key 命中时被续期，TTL 形同虚设，一直不换新
-  4. 负条目和正常条目共用一个容量池，被挤掉后不存在的 key 又打下游
+逐段演示四个场景，输出里的 loader 调用次数是关键：
+  1. 回源异常不写缓存，下一次请求重新回源，坏值不会被钉住
+  2. 同 key 并发未命中合并成一趟 loader，大家拿同一份结果，无旧值覆盖
+  3. TTL 写入时固定，读取不续期，热 key 到点照样换新
+  4. 容量驱逐优先挤掉正条目，负占位留在缓存里，幽灵 key 不打下游
 """
 
 import threading
@@ -26,7 +26,7 @@ class FakeClock:
 
 
 def demo_poisoned_on_error():
-    print("=== 1. 回源异常后缓存被污染 ===")
+    print("=== 1. 回源异常不写缓存，下次请求重新回源 ===")
     calls = []
 
     def loader(key):
@@ -38,13 +38,15 @@ def demo_poisoned_on_error():
         cache.get("pay:1")
     except RuntimeError as exc:
         print("  第一次 get ->", exc)
-    value = cache.get("pay:1")
-    print("  第二次 get ->", value, "（缓存里留下了坏值，没再回源）")
+    try:
+        cache.get("pay:1")
+    except RuntimeError as exc:
+        print("  第二次 get ->", exc, "（没有坏值占位，重新回源了一次）")
     print("  loader 调用次数:", len(calls))
 
 
 def demo_concurrent_overwrite():
-    print("\n=== 2. 并发未命中：旧快照覆盖新快照 ===")
+    print("\n=== 2. 并发未命中合并回源，无旧值覆盖 ===")
     calls = []
     guard = threading.Lock()
     gate = threading.Event()
@@ -77,11 +79,11 @@ def demo_concurrent_overwrite():
 
     print("  两次 get 各自拿到:", result.get("slow"), "/", result.get("fast"))
     print("  回源次数:", len(calls))
-    print("  缓存里最终留下的值:", cache.get("hot:cfg"), "（旧值把新值盖掉了）")
+    print("  缓存里最终留下的值:", cache.get("hot:cfg"), "（并发只放了一趟 loader，结果一致）")
 
 
 def demo_ttl_never_expires():
-    print("\n=== 3. 热 key 命中即续期，永不更新 ===")
+    print("\n=== 3. TTL 写入即固定，热 key 到点换新 ===")
     clock = FakeClock()
     calls = []
 
@@ -94,12 +96,12 @@ def demo_ttl_never_expires():
     for _ in range(20):
         clock.advance(1)
         cache.get("flag")
-    print("  ttl=5 秒、时钟推了 20 秒，get 仍返回:", cache.get("flag"))
+    print("  ttl=5 秒、时钟推了 20 秒，get 已按时换新:", cache.get("flag"))
     print("  loader 调用次数:", len(calls))
 
 
 def demo_negative_evicted():
-    print("\n=== 4. 负条目被容量挤掉，不存在的 key 反复回源 ===")
+    print("\n=== 4. 驱逐优先保负条目，不存在的 key 不再回源 ===")
     clock = FakeClock()
     calls = []
 
@@ -126,7 +128,7 @@ def demo_negative_evicted():
         cache.get("ghost")
     except NotFound:
         pass
-    print("  容量被 k1/k2 占满后再问 ghost，ghost 回源次数:", ghost_loads())
+    print("  容量被 k1/k2 占满后再问 ghost，ghost 回源次数:", ghost_loads(), "（负占位没被挤掉）")
 
 
 def main():
