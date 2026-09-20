@@ -1,7 +1,6 @@
-"""fairlease 现状演示：饥饿、同级乱序、撤单不生效、超时边界。
+"""fairlease 现场复现：饥饿、同级乱序、撤单不生效、超时边界。
 
-每个场景用注入时钟把时刻摆准，再打印实际结果；带“期望”的那行
-是修好之后该有的样子，跑在现在的代码上多半对不上。
+每个场景用注入时钟把时刻摆准，打印实际结果并与约定对照。
 """
 
 from fairlease.lease import FairLease
@@ -26,8 +25,10 @@ def scenario_starvation():
         fl.request(f"hot{t}", 0)        # 每拍都来一个高优先级
         served.append(fl.grant())
     print("  逐拍发放 ->", served)
-    print("  batch 一直没被发放 ->", "batch" in fl.pending())
-    print("  期望：第 5 拍 batch 等够 aging，这一拍该发给它")
+    print("  batch 被发放的时刻(拍) ->", served.index("batch") + 1)
+    print("  期望：第 5 拍 batch 等够 aging，这一拍发给它")
+    print("  结论：", "OK" if served ==
+          ["hot1", "hot2", "hot3", "hot4", "batch", "hot5"] else "FAIL")
 
 
 def scenario_same_priority():
@@ -36,8 +37,10 @@ def scenario_same_priority():
     fl = FairLease(clock=clock, aging=5.0)
     fl.request("zeta", 2)               # 先到
     fl.request("alpha", 2)              # 后到
-    print("  依次发放 ->", [fl.grant(), fl.grant()])
+    result = [fl.grant(), fl.grant()]
+    print("  依次发放 ->", result)
     print("  期望：先到先得，顺序为 ['zeta', 'alpha']")
+    print("  结论：", "OK" if result == ["zeta", "alpha"] else "FAIL")
 
 
 def scenario_cancel():
@@ -47,9 +50,13 @@ def scenario_cancel():
     doomed = fl.request("ghost", 0)     # 高优先级，随后被撤
     fl.request("real", 5)
     print("  cancel(ghost) ->", fl.cancel(doomed))
-    print("  撤单后 pending ->", fl.pending())
-    print("  grant() ->", fl.grant())
+    pending = fl.pending()
+    granted = fl.grant()
+    print("  撤单后 pending ->", pending)
+    print("  grant() ->", granted)
     print("  期望：pending 只剩 ['real']，grant 发的是 'real'")
+    print("  结论：", "OK" if pending == ["real"] and granted == "real"
+          else "FAIL")
 
 
 def scenario_timeout_edge():
@@ -58,15 +65,19 @@ def scenario_timeout_edge():
     fl = FairLease(clock=clock, aging=5.0)
     fl.request("edge", 1, timeout=2.0)
     clock.now = 2.0
-    print("  等满 timeout 整点，grant() ->", fl.grant())
+    edge = fl.grant()
+    print("  等满 timeout 整点，grant() ->", edge)
     print("  期望：'edge'，约定是超过 timeout 才作废")
+    print("  结论：", "OK" if edge == "edge" else "FAIL")
 
     clock2 = FakeClock(0.0)
     fl2 = FairLease(clock=clock2, aging=5.0)
     fl2.request("late", 1, timeout=2.0)
     clock2.now = 2.5
-    print("  真超时到 t=2.5，grant() ->", fl2.grant())
+    late = fl2.grant()
+    print("  真超时到 t=2.5，grant() ->", late)
     print("  期望：None，超出上限的请求该丢掉")
+    print("  结论：", "OK" if late is None else "FAIL")
 
 
 def main():
