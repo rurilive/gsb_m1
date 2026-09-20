@@ -7,6 +7,7 @@ class RunReport(object):
     states 是节点名到终态的映射，顺序执行器跑完只会出现 "ok"；
     节点抛异常时先记 "failed" 再把异常抛给调用方。
     durations 是每个落地节点占用的墙钟秒数。
+    attempts 是每个落地节点被执行的次数（含重试），由 Scheduler 记账。
     """
 
     def __init__(self):
@@ -14,6 +15,7 @@ class RunReport(object):
         self.results = {}
         self.errors = {}
         self.durations = {}
+        self.attempts = {}
 
     def status(self, name):
         return self.states[name]

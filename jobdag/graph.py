@@ -26,14 +26,18 @@ class Job(object):
     """一个待执行的节点。
 
     fn 是无参可调用对象，返回值记进 RunReport.results。
+    retries 是失败后允许的重试次数，timeout 是单次尝试的秒数上限；
+    两者由 Scheduler 使用，SequentialRunner 忽略。
     """
 
-    __slots__ = ("name", "fn", "deps")
+    __slots__ = ("name", "fn", "deps", "retries", "timeout")
 
-    def __init__(self, name, fn, deps):
+    def __init__(self, name, fn, deps, retries=0, timeout=None):
         self.name = name
         self.fn = fn
         self.deps = deps
+        self.retries = retries
+        self.timeout = timeout
 
     def __repr__(self):
         return "Job(%r, deps=%r)" % (self.name, list(self.deps))
@@ -46,15 +50,23 @@ class JobGraph(object):
         self._jobs = {}
         self._dependents = {}
 
-    def add(self, name, fn, deps=()):
-        """声明一个节点。重复名字报错；依赖此时可以不满足，留到压序时校验。"""
+    def add(self, name, fn, deps=(), retries=0, timeout=None):
+        """声明一个节点。重复名字报错；依赖此时可以不满足，留到压序时校验。
+
+        retries 是失败后的重试次数（非负整数），timeout 是单次尝试的
+        秒数上限（None 表示不限），都由 Scheduler 在运行时兑现。
+        """
         if name in self._jobs:
             raise DuplicateJobError("job %r already declared" % name)
+        if retries < 0:
+            raise ValueError("retries must be >= 0, got %r" % retries)
+        if timeout is not None and timeout <= 0:
+            raise ValueError("timeout must be > 0, got %r" % timeout)
         unique = []
         for dep in deps:
             if dep not in unique:
                 unique.append(dep)
-        job = Job(name, fn, tuple(unique))
+        job = Job(name, fn, tuple(unique), retries=retries, timeout=timeout)
         self._jobs[name] = job
         for dep in unique:
             self._dependents.setdefault(dep, []).append(name)
@@ -73,7 +85,10 @@ class JobGraph(object):
         return len(self._jobs)
 
     def topo_order(self):
-        """依赖在前、结果确定的执行序。依赖悬空报 UnknownDepError，成环报 CycleError。"""
+        """依赖在前、结果确定的执行序。依赖悬空报 UnknownDepError，成环报 CycleError。
+
+        迭代式深度优先，十万级节点不会触 RecursionError。
+        """
         for name, job in self._jobs.items():
             for dep in job.deps:
                 if dep not in self._jobs:
@@ -81,20 +96,34 @@ class JobGraph(object):
                         "job %r depends on unknown %r" % (name, dep))
         post = []
         done = set()
-        for name in self._jobs:
-            self._walk(name, done, [], post)
+        for root in self._jobs:
+            if root in done:
+                continue
+            path = [root]
+            on_path = {root}
+            stack = [(root, iter(self._dependents.get(root, ())))]
+            while stack:
+                node, dependents = stack[-1]
+                descended = False
+                for dependent in dependents:
+                    if dependent in done:
+                        continue
+                    if dependent in on_path:
+                        cycle = path[path.index(dependent):] + [dependent]
+                        raise CycleError(
+                            "dependency cycle detected: %s"
+                            % " -> ".join(repr(item) for item in cycle))
+                    path.append(dependent)
+                    on_path.add(dependent)
+                    stack.append(
+                        (dependent, iter(self._dependents.get(dependent, ()))))
+                    descended = True
+                    break
+                if not descended:
+                    stack.pop()
+                    path.pop()
+                    on_path.discard(node)
+                    done.add(node)
+                    post.append(node)
         post.reverse()
         return post
-
-    def _walk(self, name, done, path, post):
-        """沿反边深入：先沉到没有下游的叶子，回溯时记进 post。"""
-        if name in done:
-            return
-        if name in path:
-            raise CycleError("dependency cycle detected")
-        path.append(name)
-        for dependent in self._dependents.get(name, ()):
-            self._walk(dependent, done, path, post)
-        path.pop()
-        done.add(name)
-        post.append(name)
