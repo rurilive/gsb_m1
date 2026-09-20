@@ -25,3 +25,11 @@
 python3 demo.py                          # 现状演示
 python3 -m unittest discover -s tests -v # 行为基线测试
 ```
+
+## 关闭语义
+
+- `close(grace_timeout=None)` 拒收新任务：`submit`/`map` 抛 `PoolClosed`
+- 无时限：等全部已提交任务落定；有时限：到期未落定者（含排队中的）标记 `cancelled`，不再执行、状态不再翻转
+- 返回 `ShutdownReport(completed, cancelled)`：本次落定的任务数与未完成句柄列表
+- 重复 `close` 幂等，返回首次报告
+- `WorkerPool(size, atexit=True)` 退出时按 `close()` 语义自动收尾，`atexit_registered` 可查
