@@ -23,8 +23,10 @@ class Cache:
 
     - get(key)：命中且未过期直接返回；否则回源加载后写入缓存。
     - ttl：条目存活秒数；None 表示永不过期。
-    - invalidate(key)：删除该 key 的缓存条目，并清除它的失败标记。
+    - invalidate(key)：删除该 key 的缓存条目。
     - loads：累计回源次数。
+
+    回源失败不缓存：本次合并的调用方拿到异常，下一个请求会重新回源。
     """
 
     def __init__(self, loader, ttl=None, clock=time.monotonic):
@@ -34,30 +36,24 @@ class Cache:
         self._lock = threading.Lock()
         self._data = {}      # key -> (value, expire_at)
         self._flights = {}   # key -> 该 key 上正在进行的回源
-        self._failed = {}    # key -> 最近一次回源异常
         self.loads = 0
 
     # -- 对外接口 --
 
     def get(self, key):
         with self._lock:
-            if key in self._failed:
-                raise self._failed[key]
             if key in self._data:
                 value, expire_at = self._data[key]
                 if self._ttl is None or expire_at > self._clock():
                     return value
-                # 条目已过期，重新加载
+                # 条目已过期，走统一的回源/合并路径重新加载
+            flight = self._flights.get(key)
+            if flight is None:
                 flight = _Flight()
+                self._flights[key] = flight
                 leader = True
             else:
-                flight = self._flights.get(key)
-                if flight is None:
-                    flight = _Flight()
-                    self._flights[key] = flight
-                    leader = True
-                else:
-                    leader = False
+                leader = False
         if leader:
             return self._lead(key, flight)
         flight.done.wait()
@@ -81,14 +77,19 @@ class Cache:
         return value
 
     def _finish(self, key, flight, value):
-        self._flights.pop(key, None)
-        flight.done.set()
         with self._lock:
             self.loads += 1
             expire_at = None if self._ttl is None else self._clock() + self._ttl
             self._data[key] = (value, expire_at)
-        flight.value = value
+            self._flights.pop(key, None)
+            # 先赋结果再放行，保证被唤醒的跟随者读到本次加载的值
+            flight.value = value
+            flight.done.set()
 
     def _fail(self, key, flight, exc):
-        self._failed[key] = exc
-        flight.error = exc
+        with self._lock:
+            self.loads += 1
+            self._flights.pop(key, None)
+            # 先记录异常再放行，让跟随者拿到异常而不是永远阻塞
+            flight.error = exc
+            flight.done.set()
