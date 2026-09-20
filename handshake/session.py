@@ -34,6 +34,8 @@ class Session:
         self._clock = clock if clock is not None else time.monotonic
         self.state = State.CLOSED
         self.suite = None
+        # 表项动作写入、动态目标表项读取：rekey 子流程的来源稳态
+        self.rekey_resume = None
         self.log = []
         self.outbox = []
         self._deadline = None
@@ -64,9 +66,10 @@ class Session:
         if row is None:
             raise ProtocolError(self.state, event)
         src = self.state
-        self.state = row.next
+        target = row.next_fn(payload, self) if row.next_fn is not None else row.next
+        self.state = target
         self.log.append(LogEntry(
-            self._clock(), "move", f"{src.value}->{row.next.value}"))
+            self._clock(), "move", f"{src.value}->{target.value}"))
         for msg in row.sends:
             self.outbox.append((self._clock(), msg))
             self.log.append(LogEntry(self._clock(), "send", msg))

@@ -4,7 +4,16 @@
 """
 
 from .session import LogEntry, ProtocolError, Session
-from .states import STEADY_STATES, Ev, State, SUITES, T_AUTH, T_HELLO, T_KEY
+from .states import (
+    STEADY_STATES,
+    Ev,
+    REKEY_TIMEOUT,
+    State,
+    SUITES,
+    T_AUTH,
+    T_HELLO,
+    T_KEY,
+)
 from .table import Row, TABLE
 
 __all__ = [
@@ -13,6 +22,7 @@ __all__ = [
     "Session",
     "STEADY_STATES",
     "Ev",
+    "REKEY_TIMEOUT",
     "State",
     "SUITES",
     "T_AUTH",
