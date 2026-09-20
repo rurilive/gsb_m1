@@ -42,6 +42,33 @@ class SlidingWindow:
             bucket = self._buckets[self._current % self._bucket_count]
             bucket[key] = bucket.get(key, 0) + n
 
+    def add_many(self, counts):
+        """一次性记多个 key，各自加对应的条数。
+
+        一次加锁完成，保证这批计数落在同一个桶里，读快照时不会把一组
+        同时发生的计数读成两半。
+        """
+        if not counts:
+            return
+        now = self._clock()
+        with self._lock:
+            self._rotate(now)
+            bucket = self._buckets[self._current % self._bucket_count]
+            for key, n in counts.items():
+                bucket[key] = bucket.get(key, 0) + n
+
+    def snapshot(self, keys=()):
+        """同一把锁里读出多个 key 的窗口合计，返回 {key: 条数}。
+
+        决策控制需要 total 和 sampled 两个数，必须保证它们来自同一个
+        窗口状态；分开两次 count 可能正好撞上滚桶，把两个计数读岔。
+        """
+        now = self._clock()
+        with self._lock:
+            self._rotate(now)
+            return {key: sum(bucket.get(key, 0) for bucket in self._buckets)
+                    for key in keys}
+
     def count(self, key):
         """窗口内 key 的合计条数。"""
         now = self._clock()
@@ -64,8 +91,16 @@ class SlidingWindow:
     def _rotate(self, now):
         """时钟进了新的桶格就滚一下窗口。"""
         index = int(now / self._bucket_seconds)
-        if index != self._current:
-            # 换格了，上一格开始之前的数据不再算数
+        elapsed = index - self._current
+        if elapsed <= 0:
+            return
+        if elapsed >= self._bucket_count:
+            # 空窗时间超过一整个窗口，所有桶都过期了
             for bucket in self._buckets:
                 bucket.clear()
-            self._current = index
+        else:
+            # 只清已经滑出窗口的老桶，最近的桶原样保留
+            for slot in range(elapsed):
+                self._buckets[(self._current + 1 + slot)
+                              % self._bucket_count].clear()
+        self._current = index
