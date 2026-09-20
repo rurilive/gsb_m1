@@ -32,3 +32,32 @@ timewheel.clock.ManualClock 手动拨动）。
 ```bash
 python3 demo.py
 ```
+
+## 测试报告
+
+测试位于 `tests/test_timewheel.py`（标准库 unittest，注入 `ManualClock` 定死时序，
+对拍使用固定 seed，可独立重复运行）：`python3 -m unittest discover -s tests`。
+共 19 个用例：13 绿、6 红。红用例与对应缺陷如下（每个红用例上方注释写有
+「README 期望什么 / 实际发生什么」）：
+
+- `test_last_slot_participates_in_wraparound`、`test_full_revolution_delay_not_fired_early`
+  —— 缺陷：`add` 落槽取模误用 `slots - 1`，最后一个槽（下标 slots-1）从不参与
+  回绕，任务被错放槽位，导致到期不触发或整圈任务第一个 tick 就被提前触发；
+  修复方向：落槽改为 `(self._cursor + steps) % self._slots`。
+- `test_same_delay_adds_two_distinct_tasks` —— 缺陷：就绪队列用 deadline 作 dict
+  key，相同 deadline 的任务互相覆盖丢失；修复方向：就绪队列改用列表按追加
+  顺序保存（或以 (deadline, 序号) 作 key）。
+- `test_cancel_ready_task` —— 缺陷：`cancel` 只查找槽位，已进入就绪队列但尚未
+  被 `due()` 取走的任务无法取消（返回 False 且仍被取出）；修复方向：`cancel`
+  同时检查就绪队列并移除其中的任务。
+- `test_wrapping_multi_slot_advance_fires_crossed_slots` —— 缺陷：`advance` 回绕
+  分支第二段 `range(0, new_cursor)` 漏掉着陆槽（与落槽缺陷叠加后任务丢失/
+  迟到）；修复方向：回绕时把着陆槽也包含进来（`range(0, new_cursor + 1)`）。
+- `test_fuzz_against_reference` —— 对拍红：固定 seed 随机交错 挂载/取消/推进/
+  取走共 400 步，与朴素参考实现（按到期时刻排序、推进时扫描到期项）对比，
+  触发序列与 cancel 返回值不一致，是上述缺陷在随机序列下的综合表现。
+
+其余 README 语义均为绿：参数校验（delay≤0、超一整圈、时间回退）、亚 tick
+不推进、整 tick 步进、due 按到期先后且清空、句柄彼此独立、槽内取消幂等、
+取走后取消返回 False、推进不改变已挂任务到期时刻、小步推进=大步推进、
+迟到不豁免。`timewheel/` 与 `demo.py` 未做任何改动，`python3 demo.py` 照常运行。
