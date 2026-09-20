@@ -2,13 +2,8 @@
 
 头部块里每行形如 "Name: value",行间用 CRLF 隔开,块尾的空行
 不算在内;Content-Disposition 这类值除了主值还挂着一串分号隔开
-的参数,参数值可能用双引号包着。
+的参数,参数值可能用双引号包着,引号里的反斜杠转义要还原。
 """
-
-import re
-
-# 参数名 = 引号值,或参数名 = 裸值(到分号为止)
-_PARAM = re.compile(rb"([A-Za-z0-9_.-]+)\s*=\s*(?:\"([^\"]*)\"|([^;]*))")
 
 
 def parse_header_block(block):
@@ -29,17 +24,47 @@ def parse_header_block(block):
 
 
 def parse_params(value):
-    """解析 Content-Disposition 值里的参数,返回 {小写名字: 值}。"""
-    if not value:
-        return {}
+    """解析 Content-Disposition 值里的参数,返回 {小写名字: 值}。
+
+    引号包着的值里 \\ 开头的反斜杠转义还原成字面字符;裸值取到
+    分号为止,两端空白去掉。
+    """
     params = {}
-    for m in _PARAM.finditer(value.encode("latin-1")):
-        name = m.group(1).decode("ascii").lower()
-        raw = m.group(2) if m.group(2) is not None else m.group(3)
-        params[name] = _decode_value(raw)
-    return params
-
-
-def _decode_value(raw):
-    """参数值还原成文本。"""
-    return raw.decode("utf-8", "replace").strip()
+    pos = 0
+    while True:
+        semi = value.find(";", pos)
+        if semi < 0:
+            return params
+        pos = semi + 1
+        while pos < len(value) and value[pos] == " ":
+            pos += 1
+        eq = value.find("=", pos)
+        if eq < 0:
+            return params
+        name = value[pos:eq].strip().lower()
+        pos = eq + 1
+        while pos < len(value) and value[pos] == " ":
+            pos += 1
+        if pos < len(value) and value[pos] == '"':
+            pos += 1
+            chars = []
+            while pos < len(value):
+                ch = value[pos]
+                if ch == "\\" and pos + 1 < len(value):
+                    chars.append(value[pos + 1])
+                    pos += 2
+                    continue
+                if ch == '"':
+                    pos += 1
+                    break
+                chars.append(ch)
+                pos += 1
+            if name:
+                params[name] = "".join(chars)
+        else:
+            end = value.find(";", pos)
+            if end < 0:
+                end = len(value)
+            if name:
+                params[name] = value[pos:end].strip()
+            pos = end

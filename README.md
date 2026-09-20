@@ -45,3 +45,20 @@ for part in collector.parts():
 python3 demo.py                          # 现状演示
 python3 -m unittest discover -s tests -v # 行为基线测试
 ```
+
+## 修复说明
+
+- 分隔行候选要看到后面两个字节才算数:跟的是 CRLF 或 `--` 才是真
+  分隔行,正文里长得像的字节(含半截前缀)原样写进正文,不再被
+  切开;候选跨块时先留在手里,等字节到齐再判,不再按猜测跳字节
+- 分隔行或收尾的 `--` 恰好被切在块边界时,缓存候选等下一块拼齐,
+  收尾分隔行被切开不再丢最后一段
+- `finish()` 时还没看到收尾分隔行就抛 `ParseError`,半路断掉的流
+  不再当成功
+- 头部块跨块时统一按 `\r\n\r\n` 找结束空行,修掉头部值尾随多出的
+  回车
+- Content-Disposition 参数的引号值支持反斜杠转义,
+  `filename="a\"b.txt"` 这类值能完整解出,与 reference 语义一致
+- 新增 `tests/test_randomized.py`(随机切块与 reference 对拍、断流
+  报错)和 `tests/test_stress.py`(50MB 正文,峰值内存 8MB 内、
+  十秒内跑完)
