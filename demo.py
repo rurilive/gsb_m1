@@ -1,7 +1,8 @@
 """ChangeLog 现状演示。
 
 第一段：单条时间线上追加变更、取全文、重建旧版本快照。
-第二段：预留的多分支合并演示位子（见文末注释）。
+第二段：老张和小李从同一版本分叉，含冲突、独有字段、删除后又改，
+按默认策略合并，并打印来源标注、最终快照与输家对账。
 """
 
 from changelogd.changelog import ChangeLog
@@ -23,13 +24,43 @@ def main():
     for v in (1, 3, 4):
         print(f"  at('doc-1', {v}) -> {log.at('doc-1', v)}")
 
-    # TODO(合并改造): 多分支合并实现后，在这里加一段演示：
-    # 从某个版本分叉出两条分支，各自 append（含同字段不同值的冲突、
-    # 各自独有的字段、以及删除后又被人改的字段），按默认策略合并，
-    # 打印合并结果的来源标注与被消解掉的输家。
+    print("\n=== 多分支合并 ===")
+    from changelogd.changelog import DELETE
 
-    print("\n=== 多分支合并（待实现） ===")
-    print("  见上方 TODO 注释。")
+    base = ChangeLog(clock=lambda: 0.0)
+    base.append("doc-2", "title", "需求稿", 1)
+    base.append("doc-2", "status", "draft", 1)
+    base.append("doc-2", "wip", "待确认", 1)
+
+    zhang = base.fork(1, "zhang")
+    zhang.append("doc-2", "title", "老张定稿", 2)
+    zhang.append("doc-2", "status", "review", 2)
+    zhang.append("doc-2", "wip", DELETE, 2)
+
+    li = base.fork(1, "li")
+    li.append("doc-2", "status", "done", 2)
+    li.append("doc-2", "tag", "hot", 2)
+    li.append("doc-2", "wip", "小李还在改", 2)
+
+    merge_tick = iter(range(100, 110))
+    report = base.merge_branches(
+        1, [("zhang", zhang), ("li", li)], clock=lambda: next(merge_tick))
+
+    print("  合并落线（输家先落，赢家后落）：")
+    for entry in report.merged:
+        mark = "赢" if entry.state == "winner" else "输"
+        print(f"    v{entry.change.version} [{entry.branch}:{mark}] "
+              f"{entry.change.field} = {entry.change.value!r}")
+
+    print(f"  合并版本 {report.version} 的最终快照：{base.at('doc-2', report.version)}")
+    print("  被消解的输家：")
+    for entry in report.losers():
+        print(f"    {entry.change.field} = {entry.change.value!r}"
+              f"（来自 {entry.branch}）")
+    print("  wip 的中间经过仍在历史里：")
+    for change in base.history("doc-2"):
+        if change.field == "wip":
+            print(f"    v{change.version} wip = {change.value!r}")
 
 
 if __name__ == "__main__":

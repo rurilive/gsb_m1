@@ -31,3 +31,11 @@
 python3 demo.py                            # 单线变更与快照重建演示
 python3 -m unittest discover -s tests -v   # 行为基线测试
 ```
+
+## 实现说明
+
+- `fork(base_version, name)` 复制分叉点记录成新 `ChangeLog`，分支各自 `append`，版本号独立；`DELETE` 哨兵表示删字段，`at` 折叠到它时该字段不出现在快照。
+- `merge_branches(base_version, branches, resolver, clock)` 取各分支分叉后每字段最后一次改动，逐条重放回本日志；每条合并记录的 `version` 与 `ts` 都取自注入的合并时钟。
+- 默认消解策略 `delete-wins`：删除先赢，否则取 `branches` 列出顺序靠前者；另有 `first-wins` / `latest-wins` / `latest-ts-wins`。
+- 自定义消解函数签名 `resolver(field, candidates, base_version)`，`candidates` 是按分支顺序排好的 `Candidate(branch, change)`，返回中选 `Candidate`（也可返回分支名或下标）。
+- 记账口径：输家先落线、赢家后落，`history` 两边都留痕、`at` 只剩赢家口径；`MergeReport.merged` 每条含来源分支与 `winner/loser` 状态，`provenance(obj)` 与 `history` 对齐，`conflicts` 记每个冲突字段的各方与输赢，`losers()` 单列输家。
