@@ -42,21 +42,24 @@ class Store:
             payload.append({
                 "id": task.id,
                 "trigger": _dump_trigger(task.trigger),
-                "next_run": task.next_run.astimezone(_LOCAL_TZ).replace(tzinfo=None).isoformat(),
+                "next_run": task.next_run.astimezone(timezone.utc).isoformat(),
+                "paused": task.paused,
             })
         Path(path).write_text(json.dumps(payload, ensure_ascii=False, indent=1))
 
     def load(self, path: str) -> dict:
         raw = json.loads(Path(path).read_text())
         out = {}
-        from .triggers import Trigger
         from .scheduler import Task
         for item in raw:
             trigger = _load_trigger(item["trigger"])
             next_run = datetime.fromisoformat(item["next_run"])
             if next_run.tzinfo is None:
-                next_run = next_run.replace(tzinfo=timezone.utc)
+                # 兼容旧版快照：旧格式把时刻转成香港墙钟后剥掉了 tzinfo。
+                next_run = next_run.replace(tzinfo=_LOCAL_TZ)
             else:
                 next_run = next_run.astimezone(timezone.utc)
-            out[item["id"]] = Task(item["id"], trigger, lambda: None, next_run)
+            next_run = next_run.astimezone(timezone.utc)
+            paused = bool(item.get("paused", False))
+            out[item["id"]] = Task(item["id"], trigger, lambda: None, next_run, paused)
         return out

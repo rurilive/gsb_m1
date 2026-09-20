@@ -11,6 +11,21 @@ def _to_utc(dt: datetime) -> datetime:
     return dt.astimezone(timezone.utc)
 
 
+def _wall_time(tz: ZoneInfo, year: int, month: int, day: int,
+               hour: int, minute: int) -> datetime:
+    """构造 tz 下的墙钟时刻并转为 UTC，正确处理夏令时间隙（不存在的时刻）。
+
+    春季跳变日若目标时刻落在被跳过的小时内，顺延到间隙结束后的等价时刻；
+    秋季回退的歧义时刻取第一次出现（fold=0）。
+    """
+    naive = datetime(year, month, day, hour, minute)
+    aware = naive.replace(tzinfo=tz)
+    utc = aware.astimezone(timezone.utc)
+    if utc.astimezone(tz).replace(tzinfo=None) != naive:
+        utc = (naive + timedelta(hours=1)).replace(tzinfo=tz).astimezone(timezone.utc)
+    return utc
+
+
 class Trigger(ABC):
 
     @abstractmethod
@@ -47,8 +62,9 @@ class DailyTrigger(Trigger):
         local = t.astimezone(self.tz)
         nxt = local.replace(hour=self.hour, minute=self.minute, second=0, microsecond=0)
         if nxt <= local:
-            nxt = (nxt.astimezone(timezone.utc) + timedelta(days=1)).astimezone(self.tz)
-        return nxt.astimezone(timezone.utc)
+            nxt = nxt + timedelta(days=1)
+        return _wall_time(self.tz, nxt.year, nxt.month, nxt.day,
+                          nxt.hour, nxt.minute)
 
 
 class MonthlyTrigger(Trigger):
@@ -66,12 +82,13 @@ class MonthlyTrigger(Trigger):
         y, m = local.year, local.month
         while True:
             last = calendar.monthrange(y, m)[1]
-            day = min(self.day, last)
-            cand = local.replace(year=y, month=m, day=day,
-                                 hour=self.hour, minute=self.minute,
-                                 second=0, microsecond=0)
-            if cand > local:
-                return cand.astimezone(timezone.utc)
+            if self.day <= last:
+                cand = local.replace(year=y, month=m, day=self.day,
+                                     hour=self.hour, minute=self.minute,
+                                     second=0, microsecond=0)
+                if cand > local:
+                    return _wall_time(self.tz, y, m, self.day,
+                                      self.hour, self.minute)
             m += 1
             if m == 13:
                 m, y = 1, y + 1
