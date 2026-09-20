@@ -1,14 +1,16 @@
 """SQL 子集的词法与语法分析。
 
 支持：SELECT cols FROM table [WHERE cond] [ORDER BY col [ASC|DESC]] [LIMIT n]
-v1 的 cond 只有一个比较条件（col op 字面量，见 plan.Compare）。
+cond 是比较条件（col op 字面量，见 plan.Compare）用 AND/OR 与括号
+任意嵌套的条件树，AND 优先级高于 OR。
 关键字大小写不敏感，表名/列名大小写敏感，保留字不能作标识符。
 语法不符抛 ParseError。
 """
 
-from qmini.plan import COMPARE_OPS, Compare
+from qmini.plan import COMPARE_OPS, And, Compare, Or
 
-_RESERVED = frozenset(["SELECT", "FROM", "WHERE", "ORDER", "BY", "ASC", "DESC", "LIMIT"])
+_RESERVED = frozenset(["SELECT", "FROM", "WHERE", "ORDER", "BY", "ASC", "DESC",
+                       "LIMIT", "AND", "OR"])
 _TWO_CHAR_OPS = (">=", "<=", "!=")
 
 
@@ -75,7 +77,7 @@ class SelectStmt:
     def __init__(self, columns, table, where, order_by, desc, limit):
         self.columns = columns    # ["*"] 或列名列表
         self.table = table
-        self.where = where        # Compare 或 None
+        self.where = where        # Predicate 条件树或 None
         self.order_by = order_by  # 列名或 None
         self.desc = desc
         self.limit = limit        # 非负 int 或 None
@@ -150,6 +152,33 @@ class _Parser:
         return cols
 
     def _condition(self):
+        return self._or_expr()
+
+    def _or_expr(self):
+        parts = [self._and_expr()]
+        while self._at("KW", "OR"):
+            self._next()
+            parts.append(self._and_expr())
+        return parts[0] if len(parts) == 1 else Or(parts)
+
+    def _and_expr(self):
+        parts = [self._primary()]
+        while self._at("KW", "AND"):
+            self._next()
+            parts.append(self._primary())
+        return parts[0] if len(parts) == 1 else And(parts)
+
+    def _primary(self):
+        if self._at("OP", "("):
+            self._next()
+            inner = self._or_expr()
+            kind, val, _ = self._next()
+            if kind != "OP" or val != ")":
+                raise ParseError("期望右括号，实际是 %r" % (val,))
+            return inner
+        return self._comparison()
+
+    def _comparison(self):
         column = self._expect_ident()
         kind, op, _ = self._next()
         if kind != "OP" or op not in COMPARE_OPS:

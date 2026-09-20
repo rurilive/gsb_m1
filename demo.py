@@ -42,9 +42,12 @@ def main():
     print("=== 过滤 + 排序 + 截断 ===")
     show(engine, "SELECT * FROM orders WHERE amount > 80 ORDER BY amount DESC LIMIT 2")
 
-    # TODO(过滤扩展): AND/OR 嵌套条件与等值条件下推实现后，在这里补一段演示：
-    # 一条带括号组合的嵌套查询，用 explain 展示等值条件的 Filter 被推到
-    # 范围条件的 Filter 之下、先于范围条件求值。
+    print("=== 嵌套条件 + 等值下推 ===")
+    # 等值条件 city/dept 被拆到下层 Filter、靠近 SeqScan 先求值，
+    # 括号里的 OR 子树保持原样留在上层 Filter。
+    show(engine, "SELECT name, age FROM users WHERE city = 'bj' "
+                 "AND dept = 'core' AND (age >= 30 OR name = 'erin') "
+                 "ORDER BY age DESC")
 
 
 if __name__ == "__main__":

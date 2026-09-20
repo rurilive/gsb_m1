@@ -44,3 +44,14 @@ Limit[n=2]
 python3 demo.py                          # 现状演示
 python3 -m unittest discover -s tests -v # 行为基线测试
 ```
+
+## 扩展说明
+
+- WHERE 支持 AND/OR 与括号任意嵌套，AND 优先级高于 OR，可用括号改写
+- 条件在 `qmini/plan.py` 里是谓词树：`Compare` 叶子 + `And`/`Or` 内部结点，
+  explain 按 `(a AND (b OR c))` 形式展示嵌套
+- AND/OR 是新增保留字，不能再作表名列名
+- 等值下推：`build_plan` 把顶层 AND 拍平后，将 `列 = 字面量` 拆成下层
+  Filter（靠近 SeqScan 先求值），其余条件保持相对顺序留在上层
+- 任一组为空则不生成该层；OR 子树内部的 AND 不拆
+- explain 与执行共用同一份下推后的计划

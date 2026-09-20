@@ -51,6 +51,32 @@ class Compare(Predicate):
         return "%s %s %s" % (self.column, self.op, format_literal(self.value))
 
 
+class And(Predicate):
+    """合取：所有子条件为真才为真，按序短路求值。"""
+
+    def __init__(self, parts):
+        self.parts = list(parts)
+
+    def eval(self, row):
+        return all(p.eval(row) for p in self.parts)
+
+    def render(self):
+        return "(%s)" % " AND ".join(p.render() for p in self.parts)
+
+
+class Or(Predicate):
+    """析取：任一子条件为真即为真，按序短路求值。"""
+
+    def __init__(self, parts):
+        self.parts = list(parts)
+
+    def eval(self, row):
+        return any(p.eval(row) for p in self.parts)
+
+    def render(self):
+        return "(%s)" % " OR ".join(p.render() for p in self.parts)
+
+
 class PlanNode:
     """计划结点基类：可迭代，产出行 dict。
 
