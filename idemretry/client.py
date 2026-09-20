@@ -45,10 +45,6 @@ class Receipt:
             self.key, self.value, self.attempts, self.replayed)
 
 
-# 结果缓存保留时长
-_RESULT_TTL = 30.0
-
-
 class IdempotentClient:
     """幂等提交客户端。
 
@@ -75,25 +71,31 @@ class IdempotentClient:
         if key in self._keys:
             raise DuplicateKey(key)
         self._keys[key] = now + self._ttl
-        value, attempts = self._attempt_loop(key, payload)
-        self._results[key] = (value, attempts, now + _RESULT_TTL)
+        try:
+            value, attempts = self._attempt_loop(key, payload)
+        except BaseException:
+            # 本次受理没有产生确定结果，不能把键占住：
+            # 否则调用方只能干等到幂等窗口到期才能用同键重发。
+            self._keys.pop(key, None)
+            raise
+        self._results[key] = (value, attempts, now + self._ttl)
         return Receipt(key, value, attempts=attempts)
 
     def _attempt_loop(self, key, payload):
         """按 max_attempts 预算执行 transport，瞬时故障就重来。"""
         last = None
-        for attempt in range(self._max_attempts - 1):
+        for attempt in range(self._max_attempts):
             try:
-                return self._send(key, payload, attempt), attempt + 1
+                return self._send(key, payload), attempt + 1
             except TransientError as exc:
                 last = exc
         raise RetryExhausted(key) from last
 
-    def _send(self, key, payload, attempt):
-        # 每次尝试带上尝试序号，免得下游把重试当成重复请求直接挡回来
-        call_key = "%s#%d" % (key, attempt)
-        self.calls.append((call_key, payload))
-        return self._transport(call_key, payload)
+    def _send(self, key, payload):
+        # 每次尝试都必须用同一个幂等键：下游按提交键去重，
+        # 键一旦掺进尝试序号，超时后重试就会被当成新单，造成重复入账。
+        self.calls.append((key, payload))
+        return self._transport(key, payload)
 
     def _expire(self, now):
         """清掉已经到期的幂等键与结果缓存。"""
