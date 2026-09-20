@@ -22,3 +22,13 @@
 python3 demo.py
 python3 -m unittest discover -s tests -v
 ```
+
+## 结构说明
+
+- `constants.py`：口径常量层，行上限 8192、CR/LF、空白与分隔字节、头名键名全部收在这里，不再有魔法数。
+- `tokenizer.py`：切字节层，`LineTokenizer` 维护内部缓冲，数据可分任意段 `feed`；只负责按行切、剥 CRLF/裸 LF、行长在此层拦截，不认识 HTTP。
+- `message.py`：消息组装层，`RequestReader` 是显式状态机：请求行 → 头部 → 决定 body（Content-Length / chunked / 无）→ body。
+- 状态推进在 `message.py` 的 `_pump()`：每个状态一个 handler，数据不够就保留状态停下返回，新数据到达后从断点继续。
+- `errors.py` 放 `ParseError`；`parser.py` 只剩兼容门面，`parse_request` 把整段字节一次喂给同一个 `RequestReader` 再 `finish()` 收尾。
+- 接得住流式的原因：所有解析状态（含 chunk 已收字节、trailer 区）都挂在 reader 上，`feed` 只推进不重置；`finish` 统一处理 EOF（trailer 容忍 EOF，其余残缺报历史文案）。
+- 对外 API、错误类型与文本、行长口径全部不变；`tests/` 未改动，36 个测试原样全绿，`demo.py` 输出逐字节一致。
