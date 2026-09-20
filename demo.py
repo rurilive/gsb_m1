@@ -5,6 +5,7 @@
 """
 
 import random
+import time
 
 from healthd import CheckRunner
 
@@ -40,8 +41,37 @@ def main():
         print(f"  [{mark}] {name:<6} {r.detail}")
     print(f"  overall_ok = {runner.board.overall_ok()}")
 
-    # TODO(常驻自检): 自检线程实现后，在这里注册探针超时与就绪门限，
-    # 起后台线程跑几轮，展示探针超时降级、恢复翻转和 ready 门限的效果。
+    print("=== 常驻自检：超时降级与门限翻转 ===")
+    flaky = {"ok": True}
+
+    def check_flaky():
+        if not flaky["ok"]:
+            raise RuntimeError("flaky down")
+        return "flaky up"
+
+    def check_slow():
+        time.sleep(0.5)  # 每次都超过自己的 timeout，判超时失败
+        return "too late"
+
+    runner2 = CheckRunner(k=2)  # 3 个探针里至少 2 个通过才可接流量
+    runner2.register("db", check_db)
+    runner2.register("slow", check_slow, timeout=0.1)
+    runner2.register("flaky", check_flaky)
+    runner2.on_change(lambda old, new: print(f"  [on_change] {old} -> {new}"))
+
+    runner2.start(period=0.3, jitter=0.05)
+    time.sleep(1.0)
+    print(f"  slow 持续超时(2/3 通过): status={runner2.status()} ready={runner2.ready()}")
+
+    flaky["ok"] = False
+    time.sleep(1.0)
+    print(f"  flaky 也挂了(1/3 < k=2): status={runner2.status()} ready={runner2.ready()}")
+
+    flaky["ok"] = True
+    time.sleep(1.0)
+    print(f"  flaky 恢复(回到 2/3): status={runner2.status()} ready={runner2.ready()}")
+
+    runner2.stop()
 
 
 if __name__ == "__main__":

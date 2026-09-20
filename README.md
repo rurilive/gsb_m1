@@ -26,3 +26,10 @@
 python3 demo.py                          # 手动检查演示
 python3 -m unittest discover -s tests -v # 行为基线测试
 ```
+
+## 就绪语义
+
+- `status()` 说「健不健康」：全部通过为 `ok`；通过数达到门限 `k` 但不全为 `degraded`；低于 `k` 为 `down`。
+- `ready()` 说「能不能接流量」：通过探针数 `>= k`（k/n 门限）即可接，与是否 `degraded` 无关。
+- 监控告警看 `status()`，负载均衡摘挂流量看 `ready()`，两者独立判断。
+- 状态翻转时在检查线程里触发 `on_change(fn(old, new))`，回调抛错不中断检查。
