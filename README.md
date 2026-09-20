@@ -29,3 +29,10 @@
 python3 demo.py                          # 落库与投递演示
 python3 -m unittest discover -s tests -v # 行为基线测试
 ```
+
+## 实现说明
+
+- 退避：第 n 次失败后 `delay = min(backoff_base * 2**(n-1), backoff_cap)`，默认 0.5s 起、30s 封顶；`not_before = clock() + delay`，只由注入时钟判定时刻，不真 sleep。
+- 死信：`attempts` 达到 `max_attempts`（默认 5）即置 `status="dead"`，`store.dead()` 可查、`last_error` 留因；死信移出 pending，不再参与投递。
+- 租约：每次 `relay()` 以随机 owner 经 `store.claim(seq, owner, now, lease_seconds)` 认领，默认 30s TTL；他人有效租约不可抢，TTL 过期视为持有者崩溃、可被重新认领，故同一条不重复投。
+- 顺序：待发总按 seq 升序扫描；同一 aggregate 前一条在退避/被租走时，本轮跳过该分区后续所有条目，前一条成功或进死信后才放行，保证同聚合键严格按记录序、全局按 seq 单调推进。
