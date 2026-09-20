@@ -34,6 +34,7 @@ class Session:
         self._clock = clock if clock is not None else time.monotonic
         self.state = State.CLOSED
         self.suite = None
+        self.rekey_return = None
         self.log = []
         self.outbox = []
         self._deadline = None
@@ -64,9 +65,10 @@ class Session:
         if row is None:
             raise ProtocolError(self.state, event)
         src = self.state
-        self.state = row.next
+        target = row.resolve(payload, self) if row.resolve else row.next
+        self.state = target
         self.log.append(LogEntry(
-            self._clock(), "move", f"{src.value}->{row.next.value}"))
+            self._clock(), "move", f"{src.value}->{target.value}"))
         for msg in row.sends:
             self.outbox.append((self._clock(), msg))
             self.log.append(LogEntry(self._clock(), "send", msg))

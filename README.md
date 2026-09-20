@@ -47,3 +47,13 @@ clock() >= deadline 时合成 `TIMEOUT` 事件走同一张表（先记 timeout
 
     python3 demo.py                          # 握手/降级/超时三段演示
     python3 -m unittest discover -s tests -v # 行为基线测试
+
+## 扩展说明：在线 rekey
+
+- FULL/DEGRADED 均可收 `REKEY` 进子流程：`REKEY_OFFER_SENT` 发
+  `rekey-offer`，收 `PEER_REKEY_ACCEPT` 进 `REKEY_CONFIRM_SENT` 发
+  `rekey-confirm`，收 `PEER_REKEY_DONE` 发 `rekey-done-ack` 完成
+- 每步武装 `REKEY_TIMEOUT=5.0`；超时弃新密钥、回进入前稳态，连接不断
+- “回原稳态”是运行时目标：`Row.resolve(payload, session)` 覆盖 `next`，
+  触发行动作记录返回稳态，成功/超时表项共用同一解析器，表结构可继续扩展
+- 测试见 `tests/test_rekey.py`

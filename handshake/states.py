@@ -14,6 +14,8 @@ class State(Enum):
     AUTH_SENT = "AUTH_SENT"
     FULL = "FULL"
     DEGRADED = "DEGRADED"
+    REKEY_OFFER_SENT = "REKEY_OFFER_SENT"
+    REKEY_CONFIRM_SENT = "REKEY_CONFIRM_SENT"
 
 
 # 稳态：握手完成后会话长期停留的状态
@@ -27,6 +29,9 @@ class Ev:
     PEER_AUTH_OK = "PEER_AUTH_OK"
     PEER_AUTH_FAIL = "PEER_AUTH_FAIL"
     PEER_CLOSE = "PEER_CLOSE"
+    REKEY = "REKEY"
+    PEER_REKEY_ACCEPT = "PEER_REKEY_ACCEPT"
+    PEER_REKEY_DONE = "PEER_REKEY_DONE"
     TIMEOUT = "TIMEOUT"
 
 
@@ -34,6 +39,8 @@ class Ev:
 T_HELLO = 3.0
 T_KEY = 3.0
 T_AUTH = 3.0
+# rekey 子流程三步中每一步等待对端回复的定时器（秒），进入等待状态时武装
+REKEY_TIMEOUT = 5.0
 
 # 加密套件：对端在 PEER_HELLO 的 payload 里指定
 # strong -> 认证通过进 FULL；weak -> 认证通过进 DEGRADED
