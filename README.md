@@ -18,3 +18,9 @@ env 变量名形如 `PREFIX__section__key`（`__` 分隔路径段），值一律
 python3 demo.py
 python3 -m unittest discover -s tests -v
 ```
+
+## 结构说明
+
+- 层是显式管道：`ConfigStack._layers` 存 `(name, data)`，声明顺序即优先级（低 → 高），`layers()` 只回显名字；`load_config` 依次入栈 defaults、file、env。
+- 合并只在 `merge_dicts` 一处做：`as_dict()` 沿管道折叠，`add_layer` 存入栈深拷贝快照，`apply_env` 先把 `PREFIX__a__b` 收成本层 dict 再由同一路径合入。
+- 缺键抛结构化 `MissingKeyError(kind, key, source)`：`source` 为找过的层名元组（`required_subset` 为传入来源名）；`__init__` 按 `kind` 查 `_MISSING_KEY_MESSAGES` 渲染，异常类型与四句历史文案逐字不变。
