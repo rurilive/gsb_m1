@@ -29,3 +29,13 @@
 python3 demo.py                          # 连拍与按时刻读取
 python3 -m unittest discover -s tests -v # 行为基线测试
 ```
+
+## 实现说明
+
+- `RetentionPolicy(recent_window, hourly_window, max_per_obj)` 按 age=now-ts 分档，边界归入较新一档
+- age<=recent_window 一条不动；再往前到 hourly_window 每小时留该小时最后一张；更早每天留当天最后一张
+- 抽稀按「小时/天桶内留最后一张」做，桶以绝对时间对齐（ts//3600、ts//86400）
+- 三档筛完仍超 max_per_obj，从最旧的非 pin 快照继续丢，pin 住的不计入可丢集合
+- `pin(obj, ts)`/`unpin(obj, ts)` 显式按住/松开某张快照，任何一档回收都绕开它，优先级最高
+- 回收挂在 `take` 上自动触发，但按 `gc_interval` 秒节流，间隔内写入只是 O(1) 追加，不全表重扫
+- `collect_now()` 立即回收一轮并返回释放条数；`gc_stats()` 给出轮数、最近一次回收时刻、本轮与累计释放条数
