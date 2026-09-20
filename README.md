@@ -29,3 +29,14 @@
 python3 demo.py                            # 追加、读回、重开续写
 python3 -m unittest discover -s tests -v   # 行为基线测试
 ```
+
+## 实现说明
+
+- 每条记录新增 `prev` 字段，存上一条的 `digest`（首条为 64 个 0）；`digest` 覆盖 `prev`，改任何一条都会让后一条的指针对不上
+- `verify(deep=False)` 返回 `{ok, first_bad, last_good, checked}`；`first_bad` 是第一条对不上的记录的序号，`last_good` 是最后一个一致点
+- 每 `checkpoint_interval` 条（默认 1000）往 `<日志名>.chk` 固化一个检查点（序号、偏移、摘要）；`verify()` 默认锚定最近的检查点只核其后，`checked` 即本次实算条数；检查点对不上或缺失自动回退整链重核
+- `verify(deep=True)` 从首条核到尾，一条不漏
+- 末尾写一半的半行、被截掉的尾巴不算坏：`last_good` 落在最后一条完整且一致的记录上，重开时截掉半行再续写
+- 上一版写的无链字段日志打开时就地补链（重算 `prev`/`digest` 整份重写并重建检查点），不拒绝打开
+- `append` 全程持锁，`prev` 计算与落盘原子完成，多线程下链顺序即提交顺序，不分叉
+- 实测十万条追加约 4s、整链校验约 1.3s，远低于一分钟预算
