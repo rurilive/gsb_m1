@@ -1,6 +1,6 @@
 """批量任务并发执行：固定线程分片处理，单条失败不拖垮整批。"""
 
-import threading
+from tracectx.tracing import TracedThread
 
 
 class ItemFailure(Exception):
@@ -38,7 +38,7 @@ def map_batch(fn, items, workers=4):
     results = [None] * len(items)
     threads = []
     for start, chunk in chunks:
-        t = threading.Thread(target=_run_chunk, args=(fn, chunk, start, results))
+        t = TracedThread(target=_run_chunk, args=(fn, chunk, start, results))
         t.start()
         threads.append(t)
     for t in threads:

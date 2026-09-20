@@ -1,6 +1,6 @@
 """后台单任务执行：独立线程跑一段工作，可等待、可超时、可回调。"""
 
-import threading
+from tracectx.tracing import TracedThread
 
 
 def run_detached(fn, *args, timeout=None):
@@ -17,7 +17,7 @@ def run_detached(fn, *args, timeout=None):
         except BaseException as exc:  # 跨线程搬运，原样重抛
             box["error"] = exc
 
-    t = threading.Thread(target=_target, name="tracectx-detached", daemon=True)
+    t = TracedThread(target=_target, name="tracectx-detached", daemon=True)
     t.start()
     t.join(timeout)
     if t.is_alive():
@@ -44,6 +44,6 @@ def async_call(fn, *args, on_done=None, on_error=None):
         if on_done is not None:
             on_done(value)
 
-    t = threading.Thread(target=_target, name="tracectx-async", daemon=True)
+    t = TracedThread(target=_target, name="tracectx-async", daemon=True)
     t.start()
     return t
