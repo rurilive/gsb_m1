@@ -1,11 +1,15 @@
-"""MemTable 现状演示。
+"""MemTable 演示。
 
 第一段：写入落在最新一层，放不下就往下压实。
 第二段：从新到旧逐层查找，新值压过旧值。
-第三段：预留的布隆过滤器演示位子（见文末注释）。
+第三段：每层布隆过滤器如何跳过空扫、压实后重建、落盘往返与自动扩容。
 """
 
+import os
+import tempfile
+
 from blooms.table import MemTable
+from blooms.bloom import BloomFilter
 
 
 def main():
@@ -26,10 +30,45 @@ def main():
     s = t.stats()
     print(f"  stats: gets={s['gets']} hits={s['hits']} misses={s['misses']}")
 
-    # TODO(过滤器改造): 每层布隆过滤器实现后，在这里加一段演示：
-    # 查不存在的 key 时过滤器如何让整层直接跳过，stats 里
-    # 跳过次数、穿透次数、估算误判率怎么变；再演示压实后
-    # 过滤器重建、以及落盘读回来的效果。
+    print("=== 布隆过滤器：跳过、重建与落盘 ===")
+    deep = MemTable(level_capacity=1, ratio=2, error_rate=0.01)
+    for i, k in enumerate("abcd"):
+        deep.put(k, i)
+    print(f"  层级: {[sorted(level) for level in deep.levels()]}")
+    before = deep.stats()
+    print(f"  get('zz') -> {deep.get('zz')!r}   （键不存在）")
+    after = deep.stats()
+    print(f"  跳过 {after['bloom_skips'] - before['bloom_skips']} 层，"
+          f"真扫 {after['bloom_scans'] - before['bloom_scans']} 层，"
+          f"穿透={after['bloom_penetrations']}")
+    print(f"  各层估算误判率: "
+          f"{[round(r, 4) for r in after['bloom_level_error_rates']]}")
+    print("  继续写入触发逐层压实，已写键全部还查得到 -> 重建无假阴")
+    keys = [f"k{i}" for i in range(12)]
+    for i, k in enumerate(keys):
+        deep.put(k, i)
+    print(f"  抽查: get('k11')={deep.get('k11')!r} get('a')={deep.get('a')!r}")
+
+    tmpdir = tempfile.mkdtemp(prefix="blooms-demo-")
+    try:
+        path = os.path.join(tmpdir, "memtable.blm")
+        deep.dump(path)
+        revived = MemTable.load(path)
+        print(f"  落盘读回: stats 一致 -> {revived.stats() == deep.stats()}，"
+              f"get('k7')={revived.get('k7')!r}")
+    finally:
+        os.remove(os.path.join(tmpdir, "memtable.blm"))
+        os.rmdir(tmpdir)
+
+    flt = BloomFilter(100, 0.01)
+    for i in range(100):
+        flt.add(f"item-{i}")
+    first = flt.estimated_false_positive_rate()
+    for i in range(100, 400):
+        flt.add(f"item-{i}")
+    grown = flt.estimated_false_positive_rate()
+    print(f"  过滤器扩容: 写满时估算误判率 {first:.4f}，"
+          f"写到 4 倍后容量 {flt.expected_items}、误判率回落到 {grown:.4f}")
 
 
 if __name__ == "__main__":
