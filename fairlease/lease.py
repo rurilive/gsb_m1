@@ -11,7 +11,7 @@ import time
 class Request:
     """一条排队中的租约请求。"""
 
-    __slots__ = ("ticket", "node", "prio", "arrival", "timeout", "cancelled")
+    __slots__ = ("ticket", "node", "prio", "arrival", "timeout")
 
     def __init__(self, ticket, node, prio, arrival, timeout):
         self.ticket = ticket
@@ -19,7 +19,6 @@ class Request:
         self.prio = prio
         self.arrival = arrival
         self.timeout = timeout
-        self.cancelled = False
 
 
 class FairLease:
@@ -51,11 +50,9 @@ class FairLease:
 
     def cancel(self, ticket):
         """撤销一条尚未发放的请求，返回是否真的撤掉。"""
-        req = self._queue.get(ticket)
-        if req is None:
-            return False
-        req.cancelled = True
-        return True
+        # 立即出队：撤掉的单子不再参与任何一轮发放，也不会再被 grant 领到。
+        # 已发放（或已超时被清掉）的 ticket 不在队列里，返回 False。
+        return self._queue.pop(ticket, None) is not None
 
     def pending(self):
         """当前仍会参与下一轮发放的 node 列表，按服务顺序排列。"""
@@ -75,10 +72,27 @@ class FairLease:
     def _live(self, now):
         """清掉已经超时的请求，返回队列里剩下的请求。"""
         for ticket, req in list(self._queue.items()):
-            if req.timeout is not None and (now - req.arrival) >= req.timeout:
+            # 边界约定：等待时间“超过” timeout 才作废；
+            # 恰好等满 timeout（now - arrival == timeout）仍然有效。
+            if req.timeout is not None and (now - req.arrival) > req.timeout:
                 del self._queue[ticket]
         return list(self._queue.values())
 
     def _order(self, now):
-        """给出这一轮的服务顺序，等得久的会得到照顾。"""
-        return sorted(self._live(now), key=lambda req: (req.prio, req.node))
+        """给出这一轮的服务顺序，等得久的会得到照顾。
+
+        排序键分两段：先看是否已老化，等待达到 aging 窗口的请求整组
+        排在未老化请求前面，高优先级新流量再密也插不进老化组；老化组
+        内严格按先来后到（ticket），未老化组按优先级、同级再按先来后到。
+        """
+        live = self._live(now)
+
+        def rank(req):
+            aged = (now - req.arrival) >= self._aging
+            if aged:
+                # 老化请求之间只认先来后到：老化的低优先级不会被新来的
+                # 高优先级插队，因此任何请求等够 aging 后必在有限轮内发放。
+                return (0, req.ticket, req.ticket)
+            return (1, req.prio, req.ticket)
+
+        return sorted(live, key=rank)
