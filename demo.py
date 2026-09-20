@@ -1,10 +1,11 @@
 """ChangeLog 现状演示。
 
 第一段：单条时间线上追加变更、取全文、重建旧版本快照。
-第二段：预留的多分支合并演示位子（见文末注释）。
+第二段：从同一版本分叉两条分支，各自改动后三方合并。
 """
 
 from changelogd.changelog import ChangeLog
+from changelogd.merge import merge
 
 
 def main():
@@ -23,13 +24,42 @@ def main():
     for v in (1, 3, 4):
         print(f"  at('doc-1', {v}) -> {log.at('doc-1', v)}")
 
-    # TODO(合并改造): 多分支合并实现后，在这里加一段演示：
-    # 从某个版本分叉出两条分支，各自 append（含同字段不同值的冲突、
-    # 各自独有的字段、以及删除后又被人改的字段），按默认策略合并，
-    # 打印合并结果的来源标注与被消解掉的输家。
+    print("\n=== 多分支合并 ===")
+    ticks = iter(range(1, 100))
+    clock = lambda: float(next(ticks))
 
-    print("\n=== 多分支合并（待实现） ===")
-    print("  见上方 TODO 注释。")
+    base = ChangeLog(clock=clock)
+    base.append("doc-1", "title", "草稿", 1)
+    base.append("doc-1", "status", "draft", 1)
+    base.append("doc-1", "note", "临时备注", 1)
+
+    zhang = ChangeLog(clock=clock)  # 老张：改标题、状态，删掉备注
+    zhang.append("doc-1", "title", "定稿", 2)
+    zhang.append("doc-1", "status", "review", 2)
+    zhang.delete("doc-1", "note", 2)
+
+    li = ChangeLog(clock=clock)  # 小李：也动状态，补标签，改了备注
+    li.append("doc-1", "status", "published", 3)
+    li.append("doc-1", "tag", "release", 3)
+    li.append("doc-1", "note", "小李改的备注", 3)
+
+    result = merge(base.history("doc-1"), zhang.history("doc-1"), li.history("doc-1"))
+
+    print("  合并结果（含来源）：")
+    for mc in result.changes:
+        c = mc.change
+        print(f"    [{mc.origin:>8}] v{c.version} {c.field} = {c.value!r}")
+
+    print("  冲突台账（被消解的输家）：")
+    for conflict in result.conflicts:
+        losers = [(l.origin, l.change.value) for l in conflict.losers]
+        print(
+            f"    {conflict.field}: 采用 [{conflict.winner.origin}] "
+            f"{conflict.winner.change.value!r}，消解 {losers}"
+        )
+
+    merged = result.apply_to(ChangeLog(clock=clock))
+    print(f"  最终快照：{merged.at('doc-1', 99)}")
 
 
 if __name__ == "__main__":
