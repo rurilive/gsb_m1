@@ -26,6 +26,14 @@ class TimeSeriesStore:
         hi = bisect.bisect_right(self._ts, end)
         return list(zip(self._ts[lo:hi], self._vals[lo:hi]))
 
+    def pop_before(self, cutoff):
+        """移除并返回所有 ts < cutoff 的点，按时间升序。"""
+        i = bisect.bisect_left(self._ts, cutoff)
+        points = list(zip(self._ts[:i], self._vals[:i]))
+        del self._ts[:i]
+        del self._vals[:i]
+        return points
+
     def span(self):
         """返回 (最早时间戳, 最晚时间戳)，空库返回 None。"""
         if not self._ts:
