@@ -1,15 +1,43 @@
 """重试执行核心。2018 年给任务队列写的兜底层。
 
-fixed / expo / jitter 三个策略是三个不同时期加上去的，每份循环都背着
-各自的历史语义，行为以 tests/test_backoff.py 为准。
+重构后只有一个执行循环：retry() 做参数校验并把 strategy 名字换成
+策略对象，_run() 负责跑循环。等待时长、用时钟全部交给策略对象
+（见 strategies.py），sleep 和时钟可注入，默认行为不变。
+行为以 tests/test_backoff.py 为准。
 """
 
-import random
 import time
+
+from retrykit.strategies import make_strategy
 
 
 class RetryError(Exception):
     """attempts 用尽或时间预算耗尽时抛出。"""
+
+
+def _run(fn, attempts, strategy, timeout, retry_on, on_retry,
+         sleep=None, now=None):
+    """单一重试执行循环。sleep/now 可注入，None 时用真实时钟。"""
+    if sleep is None:
+        sleep = time.sleep
+    if now is None:
+        now = strategy.now
+    started = now()
+    for attempt in range(1, attempts + 1):
+        try:
+            return fn()
+        except retry_on as e:
+            if attempt >= attempts:
+                raise RetryError(
+                    "gave up after %d attempts, last error: %r" % (attempt, e))
+            if timeout is not None and now() - started >= timeout:
+                raise RetryError(
+                    "budget of %.2fs exceeded after %d attempts, last error: %r"
+                    % (timeout, attempt, e))
+            wait = strategy.wait(attempt)
+            if on_retry is not None:
+                on_retry(attempt, e, wait)
+            sleep(wait)
 
 
 def retry(fn, attempts=3, strategy="fixed", delay=1.0, max_delay=None,
@@ -30,73 +58,5 @@ def retry(fn, attempts=3, strategy="fixed", delay=1.0, max_delay=None,
         raise ValueError("attempts must be >= 1")
     if delay < 0:
         raise ValueError("delay must be >= 0")
-
-    # ---- fixed ----
-    if strategy == "fixed":
-        started = time.time()
-        n = 0
-        while n < attempts:
-            n += 1
-            try:
-                return fn()
-            except retry_on as e:
-                if n >= attempts:
-                    raise RetryError(
-                        "gave up after %d attempts, last error: %r" % (n, e))
-                if timeout is not None and time.time() - started >= timeout:
-                    raise RetryError(
-                        "budget of %.2fs exceeded after %d attempts, last error: %r"
-                        % (timeout, n, e))
-                if on_retry is not None:
-                    on_retry(n, e, delay)
-                time.sleep(delay)
-    # ---- expo ----
-    elif strategy == "expo":
-        # 2020 年加的，照着 fixed 的循环抄的
-        started = time.monotonic()
-        for attempt in range(1, attempts + 1):
-            try:
-                return fn()
-            except Exception as e:
-                if not isinstance(e, retry_on):
-                    raise
-                if attempt >= attempts:
-                    raise RetryError(
-                        "gave up after %d attempts, last error: %r" % (attempt, e))
-                wait = delay * (2 ** (attempt - 1))
-                if max_delay is not None and wait > max_delay:
-                    wait = max_delay
-                if timeout is not None and time.monotonic() - started >= timeout:
-                    raise RetryError(
-                        "budget of %.2fs exceeded after %d attempts, last error: %r"
-                        % (timeout, attempt, e))
-                if on_retry is not None:
-                    on_retry(attempt, e, wait)
-                time.sleep(wait)
-    # ---- jitter，2021 年加的 ----
-    elif strategy == "jitter":
-        started = time.monotonic()
-        attempt = 0
-        while True:
-            attempt += 1
-            try:
-                return fn()
-            except Exception as e:
-                if not isinstance(e, retry_on):
-                    raise
-                if attempt >= attempts:
-                    raise RetryError(
-                        "gave up after %d attempts, last error: %r" % (attempt, e))
-                cap = delay * (2 ** (attempt - 1))
-                if max_delay is not None and cap > max_delay:
-                    cap = max_delay
-                if timeout is not None and time.monotonic() - started >= timeout:
-                    raise RetryError(
-                        "budget of %.2fs exceeded after %d attempts, last error: %r"
-                        % (timeout, attempt, e))
-                wait = random.uniform(0, cap)
-                if on_retry is not None:
-                    on_retry(attempt, e, wait)
-                time.sleep(wait)
-    else:
-        raise ValueError("unknown strategy: %s" % strategy)
+    strat = make_strategy(strategy, delay, max_delay)
+    return _run(fn, attempts, strat, timeout, retry_on, on_retry)

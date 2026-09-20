@@ -21,3 +21,10 @@
 python3 demo.py
 python3 -m unittest discover -s tests -v
 ```
+
+## 结构说明
+
+- 分两层：`retrykit/core.py` 只有参数校验和唯一的重试执行循环 `_run()`；`retrykit/strategies.py` 是策略层，每个策略对象只负责 `wait(attempt)`（第 n 次失败后等多久）和 `now()`（预算判断用的时钟）。
+- 内置策略经 `make_strategy()` 按名字构造：`FixedStrategy` / `ExpoStrategy` / `JitterStrategy`（jitter 复用 expo 的上限再均匀取值）。
+- 执行循环不认识具体策略，只面向 `wait`/`now` 接口编程；`sleep` 和时钟均可注入（默认真实 `time.sleep`），单测不用再打补丁。
+- 自定义退避曲线因此接得住：把任意 `curve(attempt)` 函数用 `CallableStrategy` 一包（或自备同接口对象）交给 `_run()` 即可，循环零改动。
