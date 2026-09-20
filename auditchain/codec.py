@@ -9,6 +9,8 @@ import hashlib
 import json
 
 DIGEST_FIELD = "digest"
+PREV_DIGEST_FIELD = "prev_digest"
+GENESIS_DIGEST = ""
 
 
 class RecordError(ValueError):
