@@ -1,7 +1,6 @@
 """metrio: 进程内指标收集包。"""
 
 from metrio.meters import (
-    REGISTRY,
     counter_value,
     export_json,
     export_prom,
@@ -13,7 +12,6 @@ from metrio.meters import (
 )
 
 __all__ = [
-    "REGISTRY",
     "inc",
     "counter_value",
     "histogram",
