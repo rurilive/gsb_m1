@@ -14,6 +14,7 @@ class RunReport(object):
         self.results = {}
         self.errors = {}
         self.durations = {}
+        self.attempts = {}
 
     def status(self, name):
         return self.states[name]

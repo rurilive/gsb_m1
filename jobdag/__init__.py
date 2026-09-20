@@ -10,6 +10,7 @@ from .graph import (
 )
 from .report import RunReport
 from .runner import SequentialRunner
+from .scheduler import Scheduler
 
 __all__ = [
     "CycleError",
@@ -18,6 +19,7 @@ __all__ = [
     "Job",
     "JobGraph",
     "RunReport",
+    "Scheduler",
     "SequentialRunner",
     "UnknownDepError",
 ]
