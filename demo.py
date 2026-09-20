@@ -1,9 +1,10 @@
 """EventCounter 现状演示。
 
 第一段：按事件时间累计计数，乱序到达不影响总和。
-第二段：预留的滑动窗口与多窗口演示位子（见文末注释）。
+第二段：滑动窗口与多窗口并行演示。
 """
 
+from winagg.sliding import WindowSet
 from winagg.window import EventCounter
 
 
@@ -32,10 +33,31 @@ def main():
     print(f"  count={counter.count()} span={counter.span()} "
           f"last_arrival={counter.last_arrival()}")
 
-    # TODO(滑动窗口): 窗口查询、乱序修正与多窗口并行落地后，在这里加一段演示：
-    # 推进假时钟，展示最近 N 秒的窗口和随事件滑出而下降；
-    # 补一条落在窗口内的迟到事件看它被计入，再补一条早于左边界的看它被丢弃或记迟到；
-    # 最后同时挂两个不同长度的窗口，展示短窗口先淘汰、长窗口仍保留。
+    print("=== 滑动窗口与多窗口并行 ===")
+    windows = WindowSet(clock=clock)
+    short = windows.add_window(10.0, 5.0)   # 最近 10 秒，5 秒一桶
+    long_ = windows.add_window(30.0, 5.0)   # 最近 30 秒，5 秒一桶
+
+    for ts, v in [(100.0, 2), (103.0, 3), (108.0, 1), (120.0, 4)]:
+        clock.tick(1.0)  # 推进到达时钟，窗口推进只看事件时间
+        windows.add(ts, v)
+        print(f"  add(ts={ts}, v={v}) -> "
+              f"short(10s)={short.sum()} long(30s)={long_.sum()}")
+
+    print("  -- 乱序：落在窗口内的迟到事件仍计入 --")
+    print(f"  add(ts=112.0, v=5) -> {windows.add(112.0, 5)} "
+          f"short={short.sum()} long={long_.sum()}")
+
+    print("  -- 早于左边界：按策略丢弃并记迟到数 --")
+    print(f"  add(ts=105.0, v=7) -> {windows.add(105.0, 7)} "
+          f"late_count={short.late_count()}/{long_.late_count()}")
+
+    print("  -- 窗口滑出：短窗口先淘汰，聚合成产出 --")
+    windows.add(135.0, 1)
+    print(f"  add(ts=135.0, v=1) -> short={short.sum()} long={long_.sum()}")
+    print(f"  short.closed()={short.closed()}")
+    print(f"  short.merge_closed()={short.merge_closed()}")
+    print(f"  long.closed()={long_.closed()}  # 长窗口淘汰得更晚")
 
 
 if __name__ == "__main__":
