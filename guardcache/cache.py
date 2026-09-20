@@ -26,6 +26,14 @@ class _Missing:
 _MISSING = _Missing()
 
 
+_ERROR_TTL = 1.0
+"""回源异常占位条目的存活秒数。
+
+短到抖了一下的 key 能快速自愈，又能在下游故障期间挡住同一个 key 的
+重复回源。
+"""
+
+
 class _Entry:
     """一条缓存记录。
 
@@ -64,6 +72,8 @@ class GuardCache:
         self._lock = threading.Lock()
         self._main = OrderedDict()   # key -> _Entry，主层
         self._hot = OrderedDict()    # key -> _Entry，热层，与主层共享同一对象
+        self._neg = OrderedDict()    # key -> _Entry，负条目独立容量池
+        self._inflight = {}          # key -> threading.Event，在途回源去重
         self._hits = 0
         self._misses = 0
         self._loads = 0
@@ -74,39 +84,55 @@ class GuardCache:
 
     def get(self, key):
         """命中返回缓存值；负条目命中抛 NotFound；未命中回源加载。"""
-        with self._lock:
-            entry = self._hot.get(key)
-            if entry is not None:
-                if not self._expired(entry):
-                    self._hot.move_to_end(key)
-                    if key in self._main:
+        while True:
+            with self._lock:
+                entry = self._hot.get(key)
+                if entry is not None:
+                    if not self._expired(entry):
+                        self._hot.move_to_end(key)
+                        if key in self._main:
+                            self._main.move_to_end(key)
+                        self._hits += 1
+                        return entry.value
+                    del self._hot[key]
+                entry = self._main.get(key)
+                if entry is not None:
+                    if not self._expired(entry):
                         self._main.move_to_end(key)
-                    entry.expires_at = self._fresh_expiry(entry.value)
-                    self._hits += 1
-                    if entry.value is _MISSING:
+                        self._promote(key, entry)
+                        self._hits += 1
+                        return entry.value
+                    del self._main[key]
+                entry = self._neg.get(key)
+                if entry is not None:
+                    if not self._expired(entry):
+                        self._neg.move_to_end(key)
+                        self._hits += 1
                         raise NotFound(key)
-                    return entry.value
-                del self._hot[key]
-            entry = self._main.get(key)
-            if entry is not None:
-                if not self._expired(entry):
-                    self._main.move_to_end(key)
-                    entry.expires_at = self._fresh_expiry(entry.value)
-                    self._promote(key, entry)
-                    self._hits += 1
-                    if entry.value is _MISSING:
-                        raise NotFound(key)
-                    return entry.value
-                del self._main[key]
-            self._misses += 1
-        return self._load(key)
+                    del self._neg[key]
+                self._misses += 1
+                event = self._inflight.get(key)
+                if event is None:
+                    # 自己是第一个未命中的，负责回源；其余线程等结果
+                    event = threading.Event()
+                    self._inflight[key] = event
+                    break
+            # 同一 key 已有在途回源，等它完成后重新走一遍缓存查找
+            event.wait()
+        try:
+            return self._load(key)
+        finally:
+            with self._lock:
+                self._inflight.pop(key, None)
+            event.set()
 
     def invalidate(self, key):
         """删除该 key 的正/负缓存条目，返回是否真的删掉了。"""
         with self._lock:
-            existed = key in self._main
+            existed = key in self._main or key in self._neg
             self._main.pop(key, None)
             self._hot.pop(key, None)
+            self._neg.pop(key, None)
             return existed
 
     def stats(self):
@@ -134,15 +160,30 @@ class GuardCache:
                 self._negatives += 1
             raise
         except Exception:
-            # 回源抖动时先占个位，省得同一个 key 后面反复打下游
-            self._remember(key, None)
+            # 回源抖动时先占个位，省得故障期间同一个 key 反复打下游；
+            # 占位只留很短时间，之后自动回源重试，不会一直返回空结果
+            self._remember(key, None,
+                           expires_at=self._clock() + _ERROR_TTL)
             raise
         self._remember(key, value)
         return value
 
-    def _remember(self, key, value):
+    def _remember(self, key, value, expires_at=None):
         with self._lock:
-            entry = _Entry(value, self._fresh_expiry(value))
+            if expires_at is None:
+                expires_at = self._fresh_expiry(value)
+            entry = _Entry(value, expires_at)
+            if value is _MISSING:
+                # 负条目放独立容量池，不被正常条目挤掉
+                self._main.pop(key, None)
+                self._hot.pop(key, None)
+                self._neg.pop(key, None)
+                self._neg[key] = entry
+                while len(self._neg) > self._capacity:
+                    self._neg.popitem(last=False)
+                    self._evicted += 1
+                return
+            self._neg.pop(key, None)
             self._main.pop(key, None)
             self._main[key] = entry
             self._promote(key, entry)
