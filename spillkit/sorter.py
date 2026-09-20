@@ -70,11 +70,17 @@ class SortDeduper:
             self._spill()
 
     def _spill(self):
-        """把当前缓冲区排序去重后写成一个 run 文件。"""
+        """把当前缓冲区原地排序去重后写成一个 run 文件。
+
+        只允许同一个 key 在批内先收敛一次；跨批的重复在最终归并时
+        统一处理。原地排序不额外复制整份缓冲，内存占用不超过上限。
+        """
         if not self._buf:
             return
         path = self._run_path(len(self._runs))
-        write_run(path, self._sorted_dedup(self._buf), self._guard)
+        entries = self._buf
+        entries.sort(key=lambda item: (self._key(item[1]), item[0]))
+        write_run(path, self._dedup_sorted(entries), self._guard)
         self._runs.append(path)
         self._created.append(path)
         self._stats["runs_written"] += 1
@@ -83,6 +89,10 @@ class SortDeduper:
     def _sorted_dedup(self, entries):
         """按 (key, seq) 排序，同一个 key 只留最早进来的那条。"""
         ordered = sorted(entries, key=lambda item: (self._key(item[1]), item[0]))
+        return list(self._dedup_sorted(ordered))
+
+    def _dedup_sorted(self, ordered):
+        """从按 (key, seq) 排好序的序列里每个 key 留 seq 最小的一条。"""
         out = []
         last_key = _MISSING
         for seq, record in ordered:
@@ -103,22 +113,61 @@ class SortDeduper:
         self._finished = True
         if not self._runs:
             return [record for _, record in self._sorted_dedup(self._buf)]
-        final_path = os.path.join(self._dir, "merged-00000.run")
-        self._created.append(final_path)
-        self._stats["merge_passes"] += 1
-        merge_runs(self._runs, self._key, final_path, self._guard)
-        out = []
-        reader = RunReader(final_path, self._guard)
+        # 没装满的尾批不能丢：有已落盘 run 时它也得先成一个 run，
+        # 之后才能跟其余 run 一起跨 run 去重归并。
+        if self._buf:
+            self._spill()
+        final_path = self._merge_all()
         try:
-            while True:
-                item = reader.next()
-                if item is None:
-                    break
-                out.append(item[1])
+            out = []
+            reader = RunReader(final_path, self._guard)
+            try:
+                while True:
+                    item = reader.next()
+                    if item is None:
+                        break
+                    out.append(item[1])
+            finally:
+                reader.close()
+            return out
         finally:
-            reader.close()
-        self._stats["peak_open_runs"] = self._guard.peak
-        return out
+            self._stats["peak_open_runs"] = self._guard.peak
+
+    def _merge_all(self):
+        """多趟受限归并全部 run，返回最终 run 的路径。
+
+        单趟最多开 ``fd_limit - 1`` 个输入加一个输出，任何时刻打开的
+        run 文件都不超过 fd_limit。每趟消费掉的 run 立即删除，避免
+        溢写文件堆积；中间输出统一登记，供 close() 兜底清理。
+        """
+        paths = self._runs
+        fan_in = self._guard.fd_limit - 1
+        pass_index = 0
+        while len(paths) > 1:
+            next_paths = []
+            merge_index = 0
+            for start in range(0, len(paths), fan_in):
+                group = paths[start:start + fan_in]
+                if len(group) == 1:
+                    # 凑不齐一批的单根 run 直接带进下一趟，不白开一趟。
+                    next_paths.extend(group)
+                    continue
+                out_path = os.path.join(
+                    self._dir,
+                    "merge-%03d-%05d.run" % (pass_index, merge_index),
+                )
+                merge_runs(group, self._key, out_path, self._guard)
+                self._created.append(out_path)
+                for consumed in group:
+                    remove_file(consumed)
+                    if consumed in self._created:
+                        self._created.remove(consumed)
+                next_paths.append(out_path)
+                merge_index += 1
+            paths = next_paths
+            self._stats["merge_passes"] += 1
+            pass_index += 1
+        return paths[0]
 
     def close(self):
         """删掉这次排序产生的全部 run 文件和临时目录。"""
