@@ -68,12 +68,15 @@ class Quorum:
         self._config = config or {}
         self._term = 0
         self._seen = {}                                # node -> 最近一次心跳时刻
-        self._quorum_size = len(cluster) // 2 + 1      # 多数派门槛，构造时算好
         self._lock = threading.Lock()
 
     def majority(self):
-        """凑够这么多票才算多数派。"""
-        return self._quorum_size
+        """凑够这么多票才算多数派。
+
+        按当前在册成员动态计算（N//2 + 1），成员扩容或摘除后立刻生效，
+        不能沿用构造时的旧成员数。
+        """
+        return len(self._cluster) // 2 + 1
 
     def negotiated_timeout(self):
         """集群协商出来的失联超时；没协商过就退回本地配置。"""
@@ -82,9 +85,21 @@ class Quorum:
     def heartbeat(self, node, ts, term=0):
         """记下 node 在 ts 时刻的心跳，它在这条心跳里声称自己处于 term 任期。
 
-        返回这条心跳是否被采纳。
+        返回这条心跳是否被采纳。以下心跳一律不认：
+
+        - 来自不在册成员（已被摘除）的心跳，摘了就不能再参与计票；
+        - term 落后于本节点当前任期的心跳，旧任期的消息不能复活旧 leader；
+
+        term 比本节点更新时，先把本节点任期跟到该 term 再记为活跃，
+        任期号只许往前、不许回退。
         """
         with self._lock:
+            if node not in self._cluster:
+                return False
+            if term < self._term:
+                return False
+            if term > self._term:
+                self._term = term
             self._seen[node] = ts
             return True
 
@@ -110,5 +125,14 @@ class Quorum:
             return None
 
     def _active(self, now):
-        """按失联超时挑出还活着的节点。调用方必须持锁。"""
-        return {node for node, ts in self._seen.items() if now - ts < self._timeout}
+        """此刻还活着的在册节点。调用方必须持锁。
+
+        活跃判定走集群协商好的超时（没协商过才退回本机配置），并且只看
+        当前在册成员：被摘除的节点即使留着旧心跳时间戳也不参与计票。
+        """
+        timeout = self.negotiated_timeout()
+        return {
+            node
+            for node, ts in self._seen.items()
+            if node in self._cluster and now - ts < timeout
+        }
