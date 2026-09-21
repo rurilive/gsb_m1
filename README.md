@@ -36,3 +36,12 @@
 python3 demo.py                          # 计数器与集合的现状演示
 python3 -m unittest discover -s tests -v # 行为基线测试
 ```
+
+## 实现说明
+
+`crdtbox/aworset.py` 的 `AWORSet` 取代 `TwoPhaseSet` 承担可移除集合：
+
+- 因果信息：每次加入生成唯一 dot `(replica_id, seq)`，版本向量 `clock` 记录各副本已连续看到的序号；删除只作废删除方见过的 dot，并发加入胜出。
+- 合并：存活 dot 取"在一方存活且未被另一方因果覆盖"的并集，`clock` 逐槽取大，满足交换律、结合律、幂等。
+- 墓碑回收：被删 dot 若未被 `clock` 覆盖（序号有缺口）暂存为墓碑；`clock` 追上即被 `gc()` 回收（`merge` 末尾自动调用），回收后 `clock` 本身就是屏障，旧状态到达也复活不了元素。
+- 编码：`to_dict()`/`from_dict()` 输出 JSON 兼容字典（`live` 用 `[元素, [dot…]]` 列表以支持非字符串元素），`dumps()`/`loads()` 走 JSON 字符串，往返保留 `clock`、存活 dot 与墓碑。

@@ -7,6 +7,7 @@
 
 from crdtbox.counter import GCounter
 from crdtbox.set import TwoPhaseSet
+from crdtbox.aworset import AWORSet
 
 
 def main():
@@ -31,8 +32,32 @@ def main():
     print(f"  value={x.value()}")
     print(f"  contains(red)={x.contains('red')}")
 
-    # TODO(因果合并改造): 删除重入、并发加入胜出、墓碑回收、
-    # 状态编解码的演示都加在这一段下面。
+    print("=== 因果集合：删除重入与并发加入胜出 ===")
+    p = AWORSet("p")
+    q = AWORSet("q")
+    p.add("red").add("blue")
+    q.merge(p)
+    q.discard("red")   # q 删掉 red
+    p.add("red")       # p 并发地把 red 加回来
+    p.merge(q)
+    q.merge(p)
+    print(f"  合并后 p={p.value()} q={q.value()}")
+    print(f"  并发加入胜出 contains(red)={p.contains('red')}")
+    q.discard("red")   # 删除生效后还能再加回来
+    p.merge(q)
+    print(f"  再次删除 p={p.value()}")
+    p.add("red")
+    q.merge(p)
+    print(f"  删除后重入 q={q.value()}")
+
+    print("=== 墓碑回收 ===")
+    print(f"  全状态同步下墓碑数={p.tombstone_count()}（删除已被因果时钟吸收）")
+
+    print("=== 状态编解码 ===")
+    payload = p.dumps()
+    r = AWORSet.loads(payload)
+    print(f"  编码 {len(payload)} 字节，解码后 value={r.value()}")
+    print(f"  往返一致={r.to_dict() == p.to_dict()}")
 
 
 if __name__ == "__main__":
