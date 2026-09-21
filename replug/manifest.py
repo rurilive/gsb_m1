@@ -1,7 +1,8 @@
 """插件清单解析与版本工具。
 
 插件的 PLUGIN 字典至少要给出 name 与 version：name 必须等于文件名主体，
-version 形如 1.2.3；description 可选。
+version 形如 1.2.3；description 可选；requires 可选，是本插件依赖的
+其他插件名列表，装载按依赖序 init。
 """
 
 import re
@@ -28,12 +29,13 @@ def compare_versions(left, right):
 class PluginManifest:
     """一次装载时冻结下来的插件身份。"""
 
-    __slots__ = ("name", "version", "description")
+    __slots__ = ("name", "version", "description", "requires")
 
-    def __init__(self, name, version, description=""):
+    def __init__(self, name, version, description="", requires=()):
         self.name = name
         self.version = version
         self.description = description
+        self.requires = tuple(requires)
 
     def __repr__(self):
         return "PluginManifest(name=%r, version=%r)" % (self.name, self.version)
@@ -53,4 +55,16 @@ def parse_manifest(raw, expected_name, path):
     description = raw.get("description", "")
     if not isinstance(description, str):
         raise ManifestError("%s 的 description 不是字符串" % path)
-    return PluginManifest(name, raw["version"], description)
+    requires_raw = raw.get("requires", [])
+    if not isinstance(requires_raw, (list, tuple)):
+        raise ManifestError("%s 的 requires 不是列表" % path)
+    requires = []
+    for dep in requires_raw:
+        if not isinstance(dep, str) or not dep:
+            raise ManifestError("%s 的 requires 里有非法插件名" % path)
+        requires.append(dep)
+    if len(set(requires)) != len(requires):
+        raise ManifestError("%s 的 requires 有重复依赖" % path)
+    if name in requires:
+        raise ManifestError("%s 的 requires 不能包含自己" % path)
+    return PluginManifest(name, raw["version"], description, requires)

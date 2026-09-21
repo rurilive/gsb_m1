@@ -1,6 +1,7 @@
-"""replug 现状演示：造一个小插件目录，装载后打几条请求看状态变化。
+"""replug 演示：造一个小插件目录，装载后打请求，再演示热重载。
 
-热重载的演示位子见文末注释。
+热重载部分：换文件后 reload 单个插件，旧状态经 migrate 接到新版本；
+再换一份迁移会炸的新版，看重载作废后旧版本继续服务、状态原样。
 """
 
 import os
@@ -32,6 +33,33 @@ def init(ctx):
 def handle(state, request):
     state["total"] += request.get("delta", 1)
     return state["total"]
+'''
+
+GREETER_V2 = '''\
+PLUGIN = {"name": "greeter", "version": "2.0.0", "description": "打招呼（带语言）"}
+
+
+def migrate(old_state):
+    new_state = dict(old_state)
+    new_state.setdefault("lang", "zh")
+    return new_state
+
+
+def handle(state, request):
+    state["hits"] += 1
+    return "[%s] 你好 %s，第 %d 次" % (state["lang"], request["who"], state["hits"])
+'''
+
+GREETER_BAD = '''\
+PLUGIN = {"name": "greeter", "version": "3.0.0"}
+
+
+def migrate(old_state):
+    raise RuntimeError("迁移脚本炸了")
+
+
+def handle(state, request):
+    return "不该出现"
 '''
 
 
@@ -77,9 +105,25 @@ def main():
         print("  重装失败: %s" % exc)
     print("  宿主照常服务: %s" % runtime.request("greeter", {"who": "值班"}))
 
-    # TODO(热重载): 热重载落地后，在这里补最后一段演示：
-    # 往目录里写一份新版 greeter，reload 之后看版本切换与状态迁移；
-    # 再写一份坏的新版，看重载失败后旧版本继续服务、状态没被动过。
+    print("=== 热重载：不重启，旧状态接住 ===")
+    hits_before = runtime.state_of("greeter")["hits"]
+    write_plugin(workdir, "greeter", GREETER_V2)
+    print("  reload -> %s" % runtime.reload("greeter"))
+    print("  greeter 现在是 %s，状态 %s"
+          % (runtime.version_of("greeter"), runtime.state_of("greeter")))
+    print("  %s" % runtime.request("greeter", {"who": "值班"}))
+    assert runtime.state_of("greeter")["hits"] == hits_before + 1
+    print("  一致性报告: %s" % runtime.consistency_report())
+
+    print("=== 热重载失败：整次作废，旧版本继续服务 ===")
+    write_plugin(workdir, "greeter", GREETER_BAD)
+    try:
+        runtime.reload("greeter")
+    except ReplugError as exc:
+        print("  重载失败: %s" % exc)
+    print("  greeter 仍是 %s，状态没动: %s"
+          % (runtime.version_of("greeter"), runtime.state_of("greeter")))
+    print("  宿主照常服务: %s" % runtime.request("greeter", {"who": "运维"}))
 
 
 if __name__ == "__main__":

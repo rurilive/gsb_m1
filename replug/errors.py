@@ -4,6 +4,7 @@ ReplugError    所有异常的基类
 ManifestError  PLUGIN 声明缺失或格式不对
 LoadError      插件模块导入失败
 InitError      插件 init 抛错（LoadError 的子类）
+MigrateError   热重载时插件 migrate 抛错
 PluginNotFound 请求或查询的插件不在宿主里
 PluginError    插件 handle 抛错，消息里带插件名
 """
@@ -23,6 +24,10 @@ class LoadError(ReplugError):
 
 class InitError(LoadError):
     """插件 init 调用失败。"""
+
+
+class MigrateError(ReplugError):
+    """热重载时插件 migrate 调用失败。"""
 
 
 class PluginNotFound(ReplugError):
