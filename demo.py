@@ -1,16 +1,17 @@
-"""centledger 现状演示：把线上反馈的几类现象直接跑出来。
+"""centledger 修复后演示：按财务口径把各类场景直接跑出来。
 
-一笔十块钱均摊到三个账户，尾差没人管；退款对冲批里零权重账户被扣钱；
-分批跑得越多账面跟请求总额差得越远；比一分小的请求无声无息；
-同一批重放余额翻倍；大额入账差几分。修好之后，各段输出应该
-与财务口径一致，重放输出稳定。
+均摊尾差归权重最大（并列取账户名靠前）的户；退款对冲批里零权重
+账户不动；分批跑账面与请求总额始终对齐；比一分小的请求直接报错；
+同一批重放返回首次结果，输出逐字节稳定；大额入账一分不差。
 """
 
 import random
 import sys
 import time
 
-from centledger import BatchRequest, Ledger, allocate, format_cents, from_cents
+from centledger import (
+    BatchRequest, Ledger, MoneyError, allocate, format_cents, from_cents,
+)
 
 
 def section(title):
@@ -18,13 +19,13 @@ def section(title):
 
 
 def even_split_tail():
-    section("均摊的尾差没人管")
+    section("均摊尾差：归权重最大、账户名靠前的户")
     total = "10.00"
     weights = {"alpha": 1, "beta": 1, "gamma": 1}
     allocation = allocate(total, list(weights.values()))
     print("  分摊 %s 给三个等权账户" % total)
     print("  各户份额: %s" % [format_cents(int(s * 100)) for s in allocation.shares])
-    print("  份额合计: %s，未摊出的尾差: %s"
+    print("  份额合计: %s，待结算尾差: %s（记账时归 alpha）"
           % (format_cents(int(allocation.total_allocated() * 100)),
              format_cents(int(allocation.residual * 100))))
     ledger = Ledger()
@@ -36,7 +37,7 @@ def even_split_tail():
 
 
 def reversal_batch():
-    section("退款对冲批：零权重账户被扣尾差")
+    section("退款对冲批：零权重账户不动，尾差跟着总额走")
     ledger = Ledger()
     result = ledger.apply_batch("B-2", [
         BatchRequest("-10.00", {"coupon": 0, "alice": 1, "bob": 1, "carol": 1}),
@@ -49,7 +50,7 @@ def reversal_batch():
 
 
 def batch_drift():
-    section("按批摊开后累计漂移")
+    section("按批摊开：账面与请求总额始终对齐")
     ledger = Ledger()
     batches = 200
     for index in range(batches):
@@ -67,17 +68,19 @@ def batch_drift():
 def sub_cent_request():
     section("小于一分的请求")
     ledger = Ledger()
-    result = ledger.apply_batch("B-3", [
-        BatchRequest("0.004", {"alpha": 1, "beta": 1}),
-    ])
     print("  请求总额 0.004，权重 alpha=1 beta=1")
-    print("  批次结果里的账户: %s" % sorted(result.credits))
+    try:
+        ledger.apply_batch("B-3", [
+            BatchRequest("0.004", {"alpha": 1, "beta": 1}),
+        ])
+    except MoneyError as exc:
+        print("  被拒: %s" % exc)
     print("  账本余额: %s" % ledger.balances())
     print("  %s" % ledger.reconcile().render())
 
 
 def replay_same_batch():
-    section("同一批重放")
+    section("同一批重放：返回首次结果，不重复入账")
     requests = [BatchRequest("6.00", {"alpha": 1, "beta": 1, "gamma": 1})]
     ledger = Ledger()
     first = ledger.apply_batch("B-4", requests)
@@ -92,7 +95,7 @@ def replay_same_batch():
 
 
 def account_order_matters():
-    section("同一笔请求，账户顺序不同")
+    section("同一笔请求，账户顺序不同，输出一致")
     total = "-10.00"
     first = Ledger().apply_batch("B-5", [
         BatchRequest(total, {"bob": 1, "carol": 1, "dave": 1}),
@@ -110,7 +113,7 @@ def account_order_matters():
 
 
 def large_amount():
-    section("大额入账")
+    section("大额入账：十几位金额一分不差")
     amount = "12345678901234567.89"
     expected_cents = 1234567890123456789
     ledger = Ledger()

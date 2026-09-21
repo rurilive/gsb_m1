@@ -3,7 +3,7 @@
 账本以整数分记账，金额在进出账本的边界上都要经过这里换算。
 """
 
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal, ROUND_HALF_UP, localcontext
 
 CENT = Decimal("0.01")
 ZERO = Decimal("0.00")
@@ -13,18 +13,35 @@ class MoneyError(ValueError):
     """金额没法表示成分。"""
 
 
+def _as_decimal(amount):
+    """把金额字段精确转成 Decimal，不经过浮点。"""
+    if isinstance(amount, Decimal):
+        return amount
+    if isinstance(amount, int):
+        return Decimal(amount)
+    if isinstance(amount, float):
+        return Decimal(str(amount))
+    if isinstance(amount, str):
+        try:
+            return Decimal(amount)
+        except ArithmeticError as exc:
+            raise MoneyError("金额换算不了: %r" % (amount,)) from exc
+    raise MoneyError("金额类型不认识: %r" % (amount,))
+
+
 def to_cents(amount):
     """把金额换算成整数分，四舍五入到分。
 
     amount 可以是 int、str、Decimal 或 float，返回 int。
+    十几位的大额也按原值精确换算，不走浮点。
     """
-    try:
-        value = Decimal(str(float(amount)))
-    except (TypeError, ValueError) as exc:
-        raise MoneyError("金额换算不了: %r" % (amount,)) from exc
+    value = _as_decimal(amount)
     if not value.is_finite():
         raise MoneyError("金额必须是有限值: %r" % (amount,))
-    return int(value.quantize(CENT, rounding=ROUND_HALF_UP) * 100)
+    with localcontext() as context:
+        context.prec = max(28, value.adjusted() + 4)
+        cents = value.quantize(CENT, rounding=ROUND_HALF_UP)
+        return int(cents * 100)
 
 
 def from_cents(cents):
