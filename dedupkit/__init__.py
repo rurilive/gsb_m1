@@ -3,5 +3,6 @@
 from dedupkit import codec
 from dedupkit.exact import ExactCounter
 from dedupkit.ledger import Ledger
+from dedupkit.sketch import BucketSketch
 
-__all__ = ["ExactCounter", "Ledger", "codec"]
+__all__ = ["ExactCounter", "Ledger", "BucketSketch", "codec"]

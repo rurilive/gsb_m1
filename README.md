@@ -27,3 +27,13 @@ python3 -m unittest discover -s tests     # 行为基线
 
 见任务描述。约束：现有行为与 `tests/` 基线保持不变（基线一个字不改），
 纯标准库。
+
+## 估算实现说明
+
+- `dedupkit/sketch.py`：`BucketSketch(bits=12, seed=0)`，HyperLogLog 分桶
+  估算。key 经 blake2b 带 seed 哈希，高位定桶、低位前导零长度进桶，
+  固定占 `2**bits` 字节（默认 4 KiB），误差约 1.6%，小基数走线性计数。
+- `merge(other)` 按桶取 max 返回新估算器，满足交换/结合/幂等，与先合
+  数据再建完全一致；bits 或 seed 不一致抛 `ValueError`。
+- codec 新增 fmt 2 存估算器（bits、seed、base64 桶值），fmt 1 老账本
+  照读，同版本内未知字段忽略；`load` 按 fmt 返回 Ledger 或 BucketSketch。

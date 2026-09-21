@@ -1,4 +1,4 @@
-"""账本文件的编解码。
+"""账本与估算器文件的编解码。
 
 文件是一份 JSON 对象，fmt 标出格式版本，当前版本是 1：分片名做键，
 值是该分片内 key 的编码列表。key 用带类型标签的两元列表编码：
@@ -11,15 +11,20 @@
     None  -> ["n", null]
 
 编码时会先按标签排序再写盘，同一份账本落盘两次字节完全一致。
-load 返回 Ledger；文件缺失抛 FileNotFoundError，内容不合法抛 ValueError。
+fmt 2 是估算器格式：kind 固定为 "sketch"，带 bits、seed 与 base64 编码
+的桶值。读文件时两个版本都认，同版本内多出来的未知字段直接忽略。
+load 按版本返回 Ledger 或 BucketSketch；文件缺失抛 FileNotFoundError，
+内容不合法抛 ValueError。
 """
 
 import base64
 import json
 
 from dedupkit.ledger import Ledger
+from dedupkit.sketch import BucketSketch
 
 FMT = 1
+SKETCH_FMT = 2
 
 
 def _encode_key(key):
@@ -80,20 +85,38 @@ def _encode_shard(keys):
     return encoded
 
 
-def save(ledger, path):
-    """把账本写成 JSON 文件，分片名与 key 都按序排好。"""
-    if not isinstance(ledger, Ledger):
-        raise TypeError(f"save 目前只支持 Ledger，收到 {type(ledger).__name__}")
-    document = {
-        "fmt": FMT,
-        "shards": {name: _encode_shard(ledger.keys(name)) for name in ledger.names()},
+def _encode_sketch(sketch):
+    return {
+        "fmt": SKETCH_FMT,
+        "kind": "sketch",
+        "bits": sketch.bits,
+        "seed": sketch.seed,
+        "registers": base64.b64encode(sketch.registers()).decode("ascii"),
     }
+
+
+def save(obj, path):
+    """把账本或估算器写成 JSON 文件，内容按序排好，字节稳定。"""
+    if isinstance(obj, Ledger):
+        document = _encode_ledger(obj)
+    elif isinstance(obj, BucketSketch):
+        document = _encode_sketch(obj)
+    else:
+        raise TypeError(f"save 只支持 Ledger 或 BucketSketch，收到 {type(obj).__name__}")
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(document, handle, ensure_ascii=True, sort_keys=True)
 
 
+def _encode_ledger(ledger):
+    document = {
+        "fmt": FMT,
+        "shards": {name: _encode_shard(ledger.keys(name)) for name in ledger.names()},
+    }
+    return document
+
+
 def load(path):
-    """读回账本；文件缺失抛 FileNotFoundError，内容不合法抛 ValueError。"""
+    """读回账本或估算器；文件缺失抛 FileNotFoundError，内容不合法抛 ValueError。"""
     with open(path, "r", encoding="utf-8") as handle:
         try:
             document = json.load(handle)
@@ -103,8 +126,14 @@ def load(path):
         raise ValueError("顶层必须是 JSON 对象")
     if "fmt" not in document:
         raise ValueError("缺 fmt 字段")
-    if document["fmt"] != FMT:
-        raise ValueError(f"不认识的格式版本: {document['fmt']!r}")
+    if document["fmt"] == FMT:
+        return _decode_ledger(document)
+    if document["fmt"] == SKETCH_FMT:
+        return _decode_sketch(document)
+    raise ValueError(f"不认识的格式版本: {document['fmt']!r}")
+
+
+def _decode_ledger(document):
     shards = document.get("shards")
     if not isinstance(shards, dict):
         raise ValueError("shards 必须是对象")
@@ -115,3 +144,25 @@ def load(path):
         for entry in entries:
             ledger.add(name, _decode_key(entry))
     return ledger
+
+
+def _decode_sketch(document):
+    if document.get("kind") != "sketch":
+        raise ValueError(f"kind 必须是 'sketch': {document.get('kind')!r}")
+    bits = document.get("bits")
+    seed = document.get("seed")
+    payload = document.get("registers")
+    if not isinstance(bits, int) or isinstance(bits, bool):
+        raise ValueError(f"bits 必须是整数: {bits!r}")
+    if not isinstance(seed, int) or isinstance(seed, bool):
+        raise ValueError(f"seed 必须是整数: {seed!r}")
+    if not isinstance(payload, str):
+        raise ValueError(f"registers 必须是 base64 文本: {payload!r}")
+    try:
+        registers = base64.b64decode(payload, validate=True)
+    except Exception as exc:
+        raise ValueError(f"registers 不是合法 base64: {payload!r}") from exc
+    try:
+        return BucketSketch.from_registers(bits, seed, registers)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"估算器参数不合法: {exc}") from exc
