@@ -3,14 +3,14 @@
 第一段：层级主题的模式匹配。
 第二段：Journal 追加与读回，含末尾残行。
 第三段：SyncBus 的顺序同步分发，以及慢订阅者拖住全局。
-第四段：预留的顺序与重放演示位子（见文末注释）。
+第四段：OrderedBus 的顺序编号、重放、背压与重启续号。
 """
 
 import os
 import tempfile
 import time
 
-from eventwire import Journal, SyncBus, matches
+from eventwire import Journal, OrderedBus, SyncBus, WindowExpired, matches
 
 MATCH_CASES = [
     ("gateway.*", "gateway.retry"),
@@ -68,12 +68,46 @@ def main():
         for name in bus.subscriber_names():
             print(f"  {name} 收到: {seen.get(name, [])}")
 
-    # TODO(顺序与重放): OrderedBus 落地后，在这里加一段演示：
-    # 1) 发布拿到单调编号并落盘，同一个编号再投一次被幂等丢掉
-    # 2) 新订阅者按 since 重放窗口内的历史，窗口外的老编号报过期
-    # 3) 慢订阅者只让自己积压，发布方和快订阅者不受影响，
-    #    积压超限后从 stats() 里读到丢弃计数或断开状态
-    # 4) 关掉再打开同一个文件，编号接着水位走，不重发也不跳号
+        print()
+        print("=== OrderedBus 顺序编号、重放与背压 ===")
+        ordered_path = os.path.join(tmp, "ordered.jsonl")
+        ordered = OrderedBus(ordered_path, window=4, backlog=4,
+                             overflow="drop")
+        oseen = {}
+        ordered.subscribe("fast", make_handler(oseen, "fast"))
+        ordered.subscribe("slow", make_handler(oseen, "slow", delay=0.05))
+        seqs = [ordered.publish("order.paid", {"id": n}) for n in range(1, 4)]
+        print(f"  连发 3 条，拿到编号 {seqs}，逐条落盘")
+        again = ordered.publish("order.paid", {"id": 2}, seq=2)
+        with Journal(ordered_path) as check:
+            print(f"  上游重投 2 号，返回 {again}，日志仍 "
+                  f"{len(check.read())} 条，重投被幂等丢掉")
+
+        late = {}
+        ordered.subscribe("late", make_handler(late, "late"), since=1)
+        print(f"  新订阅者从 1 号之后补发，subscribe 返回时已收到 "
+              f"{len(late['late'])} 条")
+
+        for n in range(4, 9):
+            ordered.publish("order.paid", {"id": n})
+            time.sleep(0.005)  # fast 跟得上，slow 每条 50ms 越落越多
+        try:
+            ordered.subscribe("ancient", make_handler({}, "ancient"), since=2)
+        except WindowExpired:
+            print(f"  窗口下限已到 {ordered.stats()['window_low']}，"
+                  f"从 3 号补发被 WindowExpired 拒掉，不静默跳过")
+        ordered.flush(timeout=5)
+        print("  slow 慢只积压自己，超限按 drop 丢掉并计数：")
+        for name, info in ordered.stats()["subscribers"].items():
+            print(f"    {name}: 投递 {info['delivered']} "
+                  f"丢弃 {info['dropped']} 状态 {info['state']}")
+        ordered.close()
+
+        reopened = OrderedBus(ordered_path)
+        nxt = reopened.publish("order.paid", {"id": 9})
+        print(f"  重启后水位 {reopened.stats()['high_water'] - 1}，"
+              f"再发一条拿到编号 {nxt}，不重发不跳号")
+        reopened.close()
 
 
 if __name__ == "__main__":

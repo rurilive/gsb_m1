@@ -31,6 +31,19 @@
 
 发布是全同步的：某一个订阅者慢，发布方和排在后面的订阅者都得等它。
 
+`eventwire/bus.py` 还提供 `OrderedBus(path, window=256, backlog=64, overflow="drop")`：
+
+- `publish(topic, payload, seq=None)` 发单调递增的全序编号，先落 Journal
+  再异步分发；上游按编号重投时，同号或更老的编号幂等丢弃、返回值不变
+- 每个订阅者有独立的有界队列与投递线程，慢订阅者只积压自己；积压超限
+  按 `overflow` 丢新事件并计数（`"drop"`）或断开该订阅者（`"disconnect"`）
+- `subscribe(name, handler, pattern="**", since=None)` 传 `since` 时先按序
+  同步补发窗口内编号更大的旧事件再转异步；窗口外的老编号抛
+  `WindowExpired`，不静默跳过
+- `stats()` 报水位、窗口下限与各订阅者的投递、丢弃、错误、积压与状态
+- 窗口与积压都有硬上限，不随时间涨；关掉重开同一路径，编号接着水位走，
+  不重发不跳号
+
 ## 目标
 
 见任务描述。约束：
