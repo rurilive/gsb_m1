@@ -1,7 +1,7 @@
 """causalsnap 现状演示。
 
 第一段：三个进程各记各的本地事件，共享单元读写。
-第二段：预留的因果序与一致性快照样例位子（见文末注释）。
+第二段：向量时钟判因果，一致性快照比新旧。
 """
 
 from causalsnap.store import CausalStore
@@ -34,10 +34,32 @@ def main():
         print("  %s: %s" % (proc, [(e.seq, e.payload) for e in events]))
     print("  共享单元: %s -> doc=%r" % (store.cells(), store.fetch("doc")))
 
-    # TODO(因果改造): 向量时钟与一致性快照实现后，在这里加一段演示：
-    # 让 bob 收到 alice 的一条事件后各自再记事件，展示 compare 判出的
-    # 先后与并发；再取两份快照，展示 cut 由哪些本地事件拼成、两份快照
-    # 的新旧或并发，以及并发快照不许被硬排成先后。
+    print("=== 因果序与一致性快照 ===")
+    # bob 收到 alice 的第 1 条事件（edit），随后各自再记新事件
+    store.observe("bob", "alice", 1)
+    store.record("bob", "reply")
+    store.record("alice", "publish")
+    store.record("carol", "comment")
+
+    alice_edit = store.local("alice")[1]
+    alice_publish = store.last("alice")
+    bob_reply = store.last("bob")
+    carol_comment = store.last("carol")
+    print("  bob 的 reply 见过 alice 的 edit: compare = %s" % store.compare(bob_reply, alice_edit))
+    print("  alice 的 publish 与 bob 的 reply 互不知情: compare = %s" % store.compare(alice_publish, bob_reply))
+    print("  carol 的 comment 与两者皆并发: %s / %s" % (
+        store.compare(carol_comment, bob_reply), store.compare(carol_comment, alice_publish)))
+
+    snap_before = store.snapshot("bob")
+    store.observe("bob", "alice", 2)  # bob 又收到 alice 的 publish
+    snap_after = store.snapshot("bob")
+    snap_carol = store.snapshot("carol")
+    for snap in (snap_after, snap_carol):
+        print("  %s 的快照 cut=%s" % (snap.observer, snap.cut))
+        for proc, events in snap.events.items():
+            print("    %s: %s" % (proc, [(e.seq, e.payload) for e in events]))
+    print("  同一观察者先后两快照: compare = %s" % snap_after.compare(snap_before))
+    print("  bob 与 carol 各看见各的: compare = %s（并发，不硬排）" % snap_after.compare(snap_carol))
 
 
 if __name__ == "__main__":

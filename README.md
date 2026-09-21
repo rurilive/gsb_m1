@@ -33,3 +33,12 @@
 python3 demo.py                          # 本地事件与共享单元演示
 python3 -m unittest discover -s tests -v # 行为基线测试
 ```
+
+## 实现说明
+
+- 每个进程持有一份向量时钟（proc -> 已知的最大序号）；`record` 时自己的分量涨到新事件序号，事件带走当时知识的副本。
+- `observe(proc, src, seq)` 把 src 第 seq 条事件的向量时钟按分量取 max 并进 proc 的知识，从它的下一条本地事件起生效。
+- `compare(a, b)` 逐分量比两条事件的向量时钟：全不劣且至少一处更小为 before，反之为 after，互有胜负为 concurrent，相同为 equal。
+- `snapshot(observer)` 用观察者当前知识当切点：`cut[p]` 表示 p 的本地事件算到第几条，`events` 按进程分组收录 0..cut[p]。
+- 知识只经 record/observe 单调增长且整段合并，切点天然闭合，不含因果前置缺失的"半截"事件。
+- `Snapshot.compare` 逐进程比 cut：全不劣且至少一处更靠后为 newer，反之为 older，互有胜负为 concurrent，相同为 equal，不做硬排。
