@@ -35,6 +35,29 @@ class RecordStore:
                 handle.flush()
             return os.path.getsize(self.path)
 
+    def replace(self, records):
+        """整文件原子替换，老日志就地补链时用。
+
+        先写临时文件再 os.replace，进程中途被杀也只会留下旧文件，
+        不会看到补了一半的链。返回新文件字节数。
+        """
+        blob = b"".join(encode_line(record) for record in records)
+        with self._lock:
+            tmp_path = "%s.tmp%d" % (self.path, os.getpid())
+            try:
+                with open(tmp_path, "wb") as handle:
+                    handle.write(blob)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(tmp_path, self.path)
+            finally:
+                if os.path.exists(tmp_path):
+                    try:
+                        os.remove(tmp_path)
+                    except OSError:
+                        pass
+            return len(blob)
+
     def scan(self):
         """从头扫一遍，返回 (entries, valid_end)。
 

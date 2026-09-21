@@ -2,13 +2,16 @@
 
 一条记录是字段名到值的映射，落盘时一行一条。规范编码固定键序和分隔符，
 同一份内容在哪个进程里编码出的字节都完全一样，摘要才做得数。
-摘要只覆盖内容本身，覆盖范围算错，老记录就全对不上了。
+摘要覆盖除 digest 之外的全部字段，链字段 prev 也算内容：改掉前一条
+或本条的 prev，digest 立刻对不上。
 """
 
 import hashlib
 import json
 
 DIGEST_FIELD = "digest"
+PREV_FIELD = "prev"
+GENESIS_PREV = ""
 
 
 class RecordError(ValueError):
