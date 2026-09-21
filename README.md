@@ -25,3 +25,10 @@
 python3 demo.py
 python3 -m unittest discover -s tests -v
 ```
+
+## 结构说明
+
+- `model.py`：`Cell`（内容/换行文本块，宽度、行高是派生数据）、`Column`（纵向 Cell 集合，列宽取最大）；只管数据，不拼字符串。
+- `measure.py`：宽度纯函数 `text_width()` 与换行 `wrap_text()`；缓存收口在模块内，清缓存走 `clear_width_cache()`。
+- `styles.py`：四套边框各是一条 `Style` 记录（角/横/竖/交叉字符 + frame/header_separator 开关），加样式只加记录。
+- `render.py`：`Table` 对外接口 + 统一管线：建 Cell 网格 → `column_widths()` 算宽 → 按样式表拼装，无样式分支。
