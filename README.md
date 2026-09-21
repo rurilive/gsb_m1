@@ -29,3 +29,12 @@
 python3 demo.py                            # 追加、读回、重开续写
 python3 -m unittest discover -s tests -v   # 行为基线测试
 ```
+
+## 防篡改链实现说明
+
+- 每条记录新增 `prev` 字段挂上一条的 `digest`（首条挂 64 个 0），`digest` 覆盖 `prev`，改内容或改链都会对不上
+- `verify(deep=False)` 返回 `{ok, first_bad, last_good, checked}`；默认从最近检查点起步，`checked` 是本次真算的条数；`deep=True` 整链重核
+- 每 `checkpoint_every` 条（默认 1000）往 `<日志名>.chk` 追加一行 `{seq, digest}` 检查点；检查点之前的内容默认可信，出事用 `deep=True`
+- 末尾没写完的半行校验时跳过；检查点越过文件末尾说明尾巴被截，自动整链重核并报出缺口位置 `first_bad`
+- 老版本日志（无 `prev`）开库时就地补链：重算摘要、原子重写文件、补齐检查点，不拒绝打开
+- 追加全程持锁，链顺序即提交顺序，多线程不分叉
