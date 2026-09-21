@@ -1,13 +1,17 @@
-"""tstore 现状演示。
+"""tstore 演示。
 
 第一段：追加若干时间点，再按下标与按时间读出来。
-第二段：预留的块编码与随机访问演示位子（见文末注释）。
+第二段：块压缩效果、单块解码、坏块跳过与老文件兼容。
 """
 
 import os
+import random
+import struct
 import tempfile
 
 from tstore import TsStore
+from tstore.blocks import BLOCK_HEADER
+from tstore.layout import HEADER as RAW_HEADER
 
 
 def main():
@@ -32,10 +36,48 @@ def main():
             print("  记录数=%d 追加次数=%d 读取次数=%d" % (
                 st["records"], st["appends"], st["reads"]))
 
-        # TODO(块编码改造): 压缩块落地后，在这里加一段演示：
-        # 同一批数据压缩后平均每条占多少字节、read_at 只解一块的效果
-        # （看 stats 里解码块数的计数），再加坏块跳过与老文件兼容。
         print("  文件字节数=%d" % os.path.getsize(path))
+
+        print("=== 块压缩 ===")
+        rng = random.Random(42)
+        pairs = []
+        ts, value = 1700000000, 20.0
+        for _ in range(10000):
+            ts += 1000 + rng.randint(-3, 3)
+            if rng.random() < 0.03:
+                value = round(value + rng.choice([-0.5, -0.25, 0.25, 0.5]), 2)
+            pairs.append((ts, value))
+        cpath = os.path.join(tmp, "demo_blocks.ts")
+        with TsStore(cpath, block_size=256) as store:
+            store.append_many(pairs)
+            size = os.path.getsize(cpath)
+            print("  %d 条共 %d 字节，平均每条 %.2f 字节（裸存 16）"
+                  % (len(pairs), size, size / len(pairs)))
+            before = store.stats()["blocks_decoded"]
+            print("  read_at(5000) ->", store.read_at(5000))
+            print("  本次 read_at 解块数=%d"
+                  % (store.stats()["blocks_decoded"] - before))
+            print("  find(%d) -> %d" % (pairs[7777][0], store.find(pairs[7777][0])))
+
+        print("=== 坏块跳过 ===")
+        with open(cpath, "r+b") as fh:  # 把第一块负载弄坏
+            fh.seek(len(RAW_HEADER) + BLOCK_HEADER.size)
+            byte = fh.read(1)
+            fh.seek(len(RAW_HEADER) + BLOCK_HEADER.size)
+            fh.write(bytes([byte[0] ^ 0xFF]))
+        with TsStore(cpath) as store:
+            st = store.stats()
+            print("  弄坏块 0 后：可读 %d 条，bad_blocks=%s"
+                  % (st["records"], st["bad_blocks"]))
+            print("  第一条可读 ->", store.read_at(0))
+
+        print("=== 老文件兼容 ===")
+        lpath = os.path.join(tmp, "legacy.ts")
+        with open(lpath, "wb") as fh:
+            fh.write(RAW_HEADER + struct.pack("<qd", 100, 1.5))
+        with TsStore(lpath) as store:
+            store.append(105, 2.5)
+            print("  老文件追加后读出 ->", store.read_all())
 
 
 if __name__ == "__main__":

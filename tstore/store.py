@@ -1,8 +1,11 @@
-"""按条裸存的时间点仓库。
+"""时间点仓库的门面与裸存实现。
 
 TsStore 把一个 (时间戳, 值) 序列按到达顺序写进本地文件，读出时按
 写入顺序返回。时间戳只许不减：等于上一条可以（重复时间戳合法），
-小于则整次写入被拒。磁盘布局见 layout.py。
+小于则整次写入被拒。
+
+TsStore 按文件头魔数分发：新文件一律用块压缩格式（blockstore.py），
+老的裸存文件（布局见 layout.py）原样打开、原样追加，不做迁移。
 
 顺序读按批流式进行，不把整库读进内存；同一句柄上追加之后立刻读出，
 要能看到刚写的数据。
@@ -10,7 +13,9 @@ TsStore 把一个 (时间戳, 值) 序列按到达顺序写进本地文件，读
 
 import os
 
+from .blockstore import BLK_MAGIC, DEFAULT_BLOCK_SIZE, BlockStore
 from .errors import OutOfOrderError
+from .errors import TsFormatError
 from .layout import (
     HEADER,
     RECORD,
@@ -25,6 +30,86 @@ _BATCH = 512
 
 
 class TsStore:
+    """本地文件里的时间点序列。
+
+    path: 文件路径。不存在就新建（块压缩格式），已存在就按原格式接着写。
+    block_size: 新建块压缩文件时每块的条数，老文件忽略。
+    """
+
+    def __init__(self, path, block_size=DEFAULT_BLOCK_SIZE):
+        path = str(path)
+        if os.path.exists(path) and os.path.getsize(path) > 0:
+            with open(path, "rb") as fh:
+                magic = fh.read(len(HEADER))
+            if magic == HEADER:
+                self._impl = RawStore(path)
+            elif magic == BLK_MAGIC:
+                self._impl = BlockStore(path)
+            else:
+                raise TsFormatError("文件头魔数不匹配，不是 tstore 文件")
+        else:
+            self._impl = BlockStore(path, block_size=block_size)
+
+    # ---- 写入 ----
+
+    def append(self, ts, value):
+        """追加一条。时间戳小于上一条时抛 OutOfOrderError。"""
+        return self._impl.append(ts, value)
+
+    def append_many(self, pairs):
+        """整批追加；任何一条不合法整批拒绝，文件一个字节都不动。"""
+        return self._impl.append_many(pairs)
+
+    # ---- 读取 ----
+
+    def read_at(self, index):
+        """按下标读一条，支持负数下标，越界抛 IndexError。"""
+        return self._impl.read_at(index)
+
+    def find(self, ts):
+        """第一个时间戳不小于 ts 的下标；全都小于 ts 时返回 -1。"""
+        return self._impl.find(ts)
+
+    def __iter__(self):
+        """按写入顺序流式迭代。"""
+        return iter(self._impl)
+
+    def read_all(self):
+        """读出全部记录，返回 (时间戳, 值) 列表。"""
+        return self._impl.read_all()
+
+    def __len__(self):
+        return len(self._impl)
+
+    # ---- 元信息 ----
+
+    @property
+    def path(self):
+        """文件路径。"""
+        return self._impl.path
+
+    @property
+    def last_ts(self):
+        """最后一条的时间戳，空库返回 None。"""
+        return self._impl.last_ts
+
+    def stats(self):
+        """计数快照，返回新字典。"""
+        return self._impl.stats()
+
+    def close(self):
+        """刷盘并关闭，可重复调用。"""
+        self._impl.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()
+        return False
+
+
+class RawStore:
     """本地文件里的时间点序列。
 
     path: 文件路径。不存在就新建，已存在就接着写。
@@ -166,6 +251,8 @@ class TsStore:
             "bytes_on_disk": len(HEADER) + self._count * RECORD.size,
             "appends": self._appends,
             "reads": self._reads,
+            "blocks_decoded": 0,
+            "bad_blocks": [],
         }
 
     def close(self):
