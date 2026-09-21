@@ -48,3 +48,12 @@ python3 demo.py                          # 发放续期归还、脚本对拍、�
 python3 -m unittest discover -s tests -v # 行为基线测试
 python3 -m leasekeeper.bench             # 连环吞吐对比表
 ```
+
+## 实现说明
+
+- `leasekeeper/durable.py` 新增 `DurableKeeper`，语义与 `LeaseKeeper` 一致，老调用不动；过期只认注入钟，外面再套 `MonotonicClamp`（`clock.py`），NTP 回拨被钳在原地，租约不多活。
+- 幂等发放：`grant(..., request_id=...)`，请求标识跟着重试走，租约活着期间同一标识（含并发重试）拿回同一份租约，不重复发号。
+- 记号只增：grant 先追加日志并 fsync 再发号，崩溃重启从日志续号；各资源历史高水位随发放灌进 `FenceGuard`，重启先回灌再放行，旧记号过不了存储层。
+- 重启那刻没归还的租约一律按回收处理（单调钟跨进程不可比，留着判不了期），恢复时计入 reclaims，同资源不会有两份活租约。
+- 续期走 lease_id 直索引加到期小顶堆，纯内存 O(1) 不碰盘；`sweep` 只弹出当轮真到期的条目，开销与全表规模无关。
+- `leasekeeper/dscript.py` 把并发重试（burst）与崩溃重启（crash）编进确定性脚本对拍；`bench` 登记 durable 实现并补两万租约下的巡检耗时对比。

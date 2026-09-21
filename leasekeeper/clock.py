@@ -7,6 +7,28 @@
 import threading
 
 
+class MonotonicClamp:
+    """包住任意时钟只报见过的最大值：回拨被钳在原地，单调只增。
+
+    机房切换时 NTP 把钟往回拨，按墙上时间判过期的租约会凭空多活一截。
+    把底层钟套进这个钳子，回拨的读数一律按最后见过的最大值报，过期判
+    定就再也吃不到回拨。
+    """
+
+    def __init__(self, clock):
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._last = None
+
+    def current(self):
+        """当前时刻：底层读数与历史最大值取大者。"""
+        with self._lock:
+            now = float(self._clock())
+            if self._last is None or now > self._last:
+                self._last = now
+            return self._last
+
+
 class FakeClock:
     """手动推进的假时钟，线程安全。
 

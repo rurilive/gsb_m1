@@ -8,11 +8,15 @@ candidates 登记进比对的实现，以后新实现加一行就能进表。
 import threading
 import time
 
+from leasekeeper.clock import FakeClock
+from leasekeeper.durable import DurableKeeper
 from leasekeeper.keeper import LeaseKeeper
 
 DEFAULT_THREADS = (1, 2, 4)
 DEFAULT_SECONDS = 0.5
 DEFAULT_TRIALS = 2
+DEFAULT_SWEEP_TOTALS = (20000, 40000)
+DEFAULT_SWEEP_EXPIRED = 50
 
 
 def _run_once(make_keeper, threads, seconds, sleep):
@@ -59,7 +63,47 @@ def candidates():
     """进比对的实现列表：(名字, 建发放台的可调用对象)。"""
     return [
         ("naive", LeaseKeeper),
+        ("durable", _make_durable),
     ]
+
+
+def sweep_candidates():
+    """进巡检对比的实现列表：(名字, 由时钟建发放台的可调用对象)。"""
+    return [
+        ("naive", lambda clock: LeaseKeeper(clock=clock)),
+        ("durable", lambda clock: DurableKeeper(clock=clock)),
+    ]
+
+
+def measure_sweep(make_keeper, total=DEFAULT_SWEEP_TOTALS[0],
+                  expired=DEFAULT_SWEEP_EXPIRED, trials=DEFAULT_TRIALS):
+    """total 条租约里 expired 条到期，量一轮 sweep 的最好耗时。"""
+    best = None
+    for _ in range(trials):
+        clock = FakeClock()
+        keeper = make_keeper(clock.current)
+        for index in range(total):
+            ttl = 10.0 if index < expired else 3600.0
+            keeper.grant("sweep.res-%06d" % index, "bench", ttl)
+        clock.advance(20.0)
+        started = time.perf_counter()
+        dead = keeper.sweep()
+        elapsed = time.perf_counter() - started
+        assert len(dead) == expired
+        best = elapsed if best is None else min(best, elapsed)
+    return best
+
+
+def _make_durable():
+    import os
+    import tempfile
+
+    path = os.path.join(
+        tempfile.gettempdir(), "leasekeeper-bench-%d.journal" % os.getpid()
+    )
+    if os.path.exists(path):
+        os.unlink(path)
+    return DurableKeeper(journal=path)
 
 
 def main(threads=DEFAULT_THREADS, seconds=DEFAULT_SECONDS,
@@ -72,8 +116,20 @@ def main(threads=DEFAULT_THREADS, seconds=DEFAULT_SECONDS,
             for t in threads
         ]
         print("%-10s" % name + "".join("%12.0f" % c for c in cells))
-    # TODO(租约台改造): 新实现登记进 candidates 后，在这里补一段两万
-    # 活跃租约下的巡检耗时对比，全表扫描和按到期回收要拉开差距。
+    print(
+        "巡检回收：每轮 %d 条到期，sweep 最好耗时（随全表规模对比）"
+        % DEFAULT_SWEEP_EXPIRED
+    )
+    print(
+        "%-10s" % "实现"
+        + "".join("%12s" % ("%d 条" % t) for t in DEFAULT_SWEEP_TOTALS)
+    )
+    for name, make_keeper in sweep_candidates():
+        cells = [
+            measure_sweep(make_keeper, total=total)
+            for total in DEFAULT_SWEEP_TOTALS
+        ]
+        print("%-10s" % name + "".join("%10.2f ms" % (c * 1000) for c in cells))
 
 
 if __name__ == "__main__":

@@ -7,14 +7,20 @@
 """
 
 from leasekeeper import (
+    DurableKeeper,
     FakeClock,
     FenceGuard,
     LeaseConflict,
     LeaseKeeper,
+    MonotonicClamp,
     StaleFence,
+    as_dtuple,
     as_tuple,
     drive,
+    drive_durable,
+    make_dscript,
     make_script,
+    model_durable,
     model_run,
 )
 
@@ -55,8 +61,84 @@ def main():
     except StaleFence as exc:
         print("  旧记号", lease.token, "被挡下:", exc)
 
-    # TODO(租约台改造): 幂等重放、崩溃重启后续号、高水位回灌与巡检
-    # 耗时演示做完后，补在这里。
+    print("=== 单调钟钳制：回拨不多活 ===")
+    wall = FakeClock(start=1000.0)
+    steady = MonotonicClamp(wall.current)
+    clamped = DurableKeeper(clock=steady.current)
+    ticking = clamped.grant("db.primary", "n1", 10.0)
+    wall.advance(6.0)
+    clamped.renew(ticking.lease_id, "n1", 10.0)
+    wall.set(999.0)
+    print("  NTP 回拨 7 秒, 钟面:", wall.current(),
+          " 租约台看到:", steady.current())
+    wall.set(1016.0)
+    print("  到点准时过期:", clamped.get("db.primary") is None,
+          "(没多活 7 秒)")
+
+    print("=== 幂等发放：同一请求重试拿回同一份 ===")
+    import os
+    import tempfile
+
+    journal = os.path.join(
+        tempfile.mkdtemp(prefix="leasekeeper-demo-"), "lease.journal"
+    )
+    durable_clock = FakeClock(start=2000.0)
+    guard2 = FenceGuard()
+
+    def boot():
+        return DurableKeeper(
+            clock=durable_clock.current, journal=journal, fence=guard2
+        )
+
+    keeper = boot()
+    first = keeper.grant("cache.hot", "n1", 30.0, request_id="req-1")
+    again = keeper.grant("cache.hot", "n1", 30.0, request_id="req-1")
+    print("  首发记号:", first.token, " 重试记号:", again.token,
+          " 同一份:", first == again, " 发放数:", keeper.stats().grants)
+
+    print("=== 崩溃重启：续号、回收、高水位回灌 ===")
+    keeper = boot()
+    print("  重启后续发:", keeper.stats().last_token + 1,
+          " 崩溃前未归还的已回收:", keeper.get("cache.hot") is None)
+    renewed_grant = keeper.grant("cache.hot", "n2", 30.0)
+    print("  新租约记号:", renewed_grant.token,
+          " 闸门高水位:", guard2.high_water("cache.hot"))
+    try:
+        guard2.check("cache.hot", first.token)
+    except StaleFence as exc:
+        print("  旧持有者记号", first.token, "被挡下:", exc)
+
+    print("=== 带崩溃与并发重试的脚本对拍 ===")
+    script = make_dscript(
+        seed=7, resources=("db.primary", "cache.hot"), steps=200
+    )
+    script_clock = FakeClock()
+    script_guard = FenceGuard()
+    script_journal = os.path.join(
+        tempfile.mkdtemp(prefix="leasekeeper-demo-"), "script.journal"
+    )
+
+    def script_boot():
+        return DurableKeeper(
+            clock=script_clock.current,
+            journal=script_journal,
+            fence=script_guard,
+        )
+
+    got, last_keeper = drive_durable(script_boot, script, script_clock)
+    want_receipts, final = model_durable(script)
+    same = [as_dtuple(r) for r in got] == [as_dtuple(r) for r in want_receipts]
+    crashes = sum(1 for event in script if event[0] == "crash")
+    print("  事件:", len(script), "条 (含崩溃", crashes, "次),",
+          "回执逐条一致:", same)
+    print("  终局持有:", final["holders"],
+          " 最后记号:", last_keeper.stats().last_token,
+          "对上:", last_keeper.stats().last_token == final["last_token"])
+    water_ok = all(
+        script_guard.high_water(resource) == token
+        for resource, token in final["water"].items()
+    )
+    print("  闸门高水位逐资源对上:", water_ok)
 
 
 if __name__ == "__main__":
