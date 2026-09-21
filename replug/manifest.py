@@ -1,7 +1,8 @@
 """插件清单解析与版本工具。
 
 插件的 PLUGIN 字典至少要给出 name 与 version：name 必须等于文件名主体，
-version 形如 1.2.3；description 可选。
+version 形如 1.2.3；description 可选；requires 可选，是所依赖插件名的
+字符串列表，缺了它本插件不许先初始化。
 """
 
 import re
@@ -28,12 +29,13 @@ def compare_versions(left, right):
 class PluginManifest:
     """一次装载时冻结下来的插件身份。"""
 
-    __slots__ = ("name", "version", "description")
+    __slots__ = ("name", "version", "description", "requires")
 
-    def __init__(self, name, version, description=""):
+    def __init__(self, name, version, description="", requires=()):
         self.name = name
         self.version = version
         self.description = description
+        self.requires = tuple(requires)
 
     def __repr__(self):
         return "PluginManifest(name=%r, version=%r)" % (self.name, self.version)
@@ -53,4 +55,17 @@ def parse_manifest(raw, expected_name, path):
     description = raw.get("description", "")
     if not isinstance(description, str):
         raise ManifestError("%s 的 description 不是字符串" % path)
-    return PluginManifest(name, raw["version"], description)
+    requires = _parse_requires(raw.get("requires", []), path)
+    return PluginManifest(name, raw["version"], description, requires)
+
+
+def _parse_requires(raw, path):
+    if isinstance(raw, str) or not isinstance(raw, (list, tuple)):
+        raise ManifestError("%s 的 requires 不是字符串列表" % path)
+    requires = []
+    for required in raw:
+        if not isinstance(required, str) or not required:
+            raise ManifestError("%s 的 requires 里有非法插件名 %r"
+                                % (path, required))
+        requires.append(required)
+    return requires

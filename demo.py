@@ -1,7 +1,4 @@
-"""replug 现状演示：造一个小插件目录，装载后打几条请求看状态变化。
-
-热重载的演示位子见文末注释。
-"""
+"""replug 演示：装载、派请求，再用 reload 不重启热切换并接住旧状态。"""
 
 import os
 import tempfile
@@ -9,7 +6,8 @@ import tempfile
 from replug import PluginRuntime, ReplugError
 
 GREETER = '''\
-PLUGIN = {"name": "greeter", "version": "1.0.0", "description": "打招呼"}
+PLUGIN = {"name": "greeter", "version": "1.0.0",
+          "description": "打招呼", "requires": ["counter"]}
 
 
 def init(ctx):
@@ -77,9 +75,70 @@ def main():
         print("  重装失败: %s" % exc)
     print("  宿主照常服务: %s" % runtime.request("greeter", {"who": "值班"}))
 
-    # TODO(热重载): 热重载落地后，在这里补最后一段演示：
-    # 往目录里写一份新版 greeter，reload 之后看版本切换与状态迁移；
-    # 再写一份坏的新版，看重载失败后旧版本继续服务、状态没被动过。
+    print("=== 热重载：不重启，旧状态接着用 ===")
+    hits_before = runtime.state_of("greeter")["hits"]
+    write_plugin(workdir, "greeter", GREETER_MIGRATE.replace("1.0.0", "1.2.0"))
+    runtime.reload("greeter")
+    print("  greeter 现在是 %s，状态从旧版接住: %s"
+          % (runtime.version_of("greeter"), runtime.state_of("greeter")))
+    print("  hits 没归零（重载前 %d），还多了 lang 字段: %s"
+          % (hits_before, runtime.request("greeter", {"who": "热重载"})))
+
+    print("=== 坏迁移作废整次重载，旧版本继续值班 ===")
+    write_plugin(workdir, "greeter", GREETER_MIGRATE_BAD)
+    try:
+        runtime.reload("greeter")
+    except ReplugError as exc:
+        print("  重载失败: %s" % exc)
+    print("  还是 %s，旧状态没被改坏: %s"
+          % (runtime.version_of("greeter"), runtime.state_of("greeter")))
+    print("  宿主照常服务: %s" % runtime.request("greeter", {"who": "值班"}))
+
+    print("=== 只重载被依赖者：counter 换新，greeter 报不一致 ===")
+    write_plugin(workdir, "counter", COUNTER.replace("2.1.0", "2.2.0"))
+    runtime.reload("counter")
+    print("  counter 现在是 %s，一致性报告: %s"
+          % (runtime.version_of("counter"), runtime.consistency_report()))
+    write_plugin(workdir, "greeter",
+                 GREETER_MIGRATE.replace("1.0.0", "1.4.0"))
+    runtime.reload("greeter")
+    print("  greeter 也重载后，一致性报告: %s"
+          % runtime.consistency_report())
+
+
+GREETER_MIGRATE = '''\
+PLUGIN = {"name": "greeter", "version": "1.0.0",
+          "description": "打招呼", "requires": ["counter"]}
+
+
+def init(ctx):
+    return {"hits": 0}
+
+
+def migrate(old_state):
+    old_state["lang"] = "zh"
+    return old_state
+
+
+def handle(state, request):
+    state["hits"] += 1
+    return "你好 %s，第 %d 次（%s）" % (
+        request["who"], state["hits"], state.get("lang", "?"))
+'''
+
+GREETER_MIGRATE_BAD = '''\
+PLUGIN = {"name": "greeter", "version": "1.3.0",
+          "requires": ["counter"]}
+
+
+def migrate(old_state):
+    old_state["tampered"] = True
+    raise RuntimeError("迁移途中炸了")
+
+
+def handle(state, request):
+    return "不该上岗的一版"
+'''
 
 
 if __name__ == "__main__":
