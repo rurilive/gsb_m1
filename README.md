@@ -19,10 +19,26 @@
 
 压缩核另有一个 `preset` 参数：`compress(data, preset=b"...")` 允许命中
 一段前置历史，`decompress(blob, preset=...)` 得拿同一段历史才能还原。
-目前 `MessageCodec` 每次都用空 preset，没人在生产上用这个参数。
+`MessageCodec` 本身每次都用空 preset；preset 的消费者是下面的字典。
+
+## 预共享字典
+
+`msglz/dict.py` 把语料里的高频片段训成一段收发双方预共享的字典，
+压缩时拿它当 preset 历史：
+
+- `train_dictionary(samples, max_size)`：数高频窗口、按重叠关系接成
+  长片段，拼出不超过 `max_size` 的字典
+- `DictStore(dir, max_versions, min_gain)`：管一目录的字典版本。
+  `rollout(samples)` 训新版并在样本上实测编码总量，比现役方案省
+  `min_gain` 才上线，否则原样退回，返回的报告写明上线与否与两种
+  比率；版本超过 `max_versions` 淘汰最老的
+- `store.encode(data)`：编一个 MZ2 帧，帧头带字典版本；
+  `store.decode(frame)` 按版本取字典还原，没字典的老 MZ1 帧照解；
+  版本没训过或已淘汰抛 `DictVersionError`（异常带 `version`），
+  结构或校验问题抛 `FormatError`
 
 `demo.py` 里的 `make_corpus(count, seed)` 造一批总线短消息（字段名固定、
-取值每次都换），当前演示是逐条压缩的实际尺寸与比率。
+取值每次都换），演示逐条压缩与带字典压缩的实际尺寸与比率。
 
 ## 问题
 

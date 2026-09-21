@@ -1,12 +1,13 @@
 """msglz 现状演示。
 
 第一段：造一小批总线短消息，逐条独立压缩，看看每条的编码尺寸。
-第二段：预留的预共享字典演示位子（见文末注释）。
+第二段：同一批语料训出预共享字典，对比带字典与不带字典的实测比率。
 """
 
 import random
+import tempfile
 
-from msglz import MessageCodec
+from msglz import DictStore, MessageCodec
 
 #: 语料里时间戳的起点，固定住好复现。
 BASE_TS = 1758300000
@@ -82,9 +83,25 @@ def main():
     print("  消息数=%d 解码数=%d 比率=%.3f" % (
         st["messages"], st["decoded"], st["ratio"]))
 
-    # TODO(预共享字典): 字典训练与版本管理落地后，在这里加第二段演示：
-    # 同一批语料训练出字典要多久、字典多大；带字典与不带字典各压一遍的
-    # 实测比率；新字典不达标时自动退回上一版的报告。
+    print("=== 预共享字典 ===")
+    with tempfile.TemporaryDirectory() as store_dir:
+        store = DictStore(store_dir, max_versions=3, min_gain=0.05)
+        report = store.rollout(corpus)
+        print("  训练 %d 条样本耗时 %.2f 秒，字典 %d 字节" % (
+            report["samples"], report["train_seconds"], report["dict_size"]))
+        print("  无字典比率 %.3f，带字典比率 %.3f，增益 %.3f → %s" % (
+            report["baseline_ratio"], report["candidate_ratio"],
+            report["gain"], report["reason"]))
+        packed_dict = sum(len(store.encode(m)) for m in corpus)
+        print("  带字典编码共 %d 字节，比无字典的 %d 字节省 %.1f%%" % (
+            packed_dict, packed, (1 - packed_dict / packed) * 100))
+        for index in (0, 5, 20, 77):
+            got = store.decode(store.encode(corpus[index]))
+            if got != corpus[index]:
+                raise SystemExit("第 %d 条带字典解出来跟原文不一致" % index)
+        print("  抽样带字典解回逐字节一致（帧头版本 v%d）" % store.active_version)
+        again = store.rollout(corpus)
+        print("  同语料再训一遍：增益 %.3f，%s" % (again["gain"], again["reason"]))
 
 
 if __name__ == "__main__":
