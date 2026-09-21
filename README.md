@@ -48,3 +48,17 @@ cache.hit_rate()                         # hits / (hits + misses)
 python3 demo.py                           # 现状演示
 python3 -m unittest discover -s tests     # 行为基线测试
 ```
+
+## 并发说明
+
+多线程网关共用同一个实例是安全的：所有读写路径（含 `size`/`keys`/
+`snapshot`/`stats` 这些观察口）都由同一把可重入锁（`threading.RLock`）
+串行化，`get` 不再留不拿锁的快路径。任何时刻 `size()` 都不会越过
+`capacity`，`keys()`、`snapshot()` 与 `stats().live` 三者始终对齐；
+`put` 覆盖已有键只记 `puts`，不会虚抬 `hits`。
+
+淘汰回调 `on_evict` 在持锁状态下同步调用，因为锁是可重入的，回调里
+对同一个缓存再做 `get`/`put`/`delete` 不会死锁；回调抛出的异常照抛给
+调用方，抛异常时淘汰已完成记账，缓存结构保持自洽、可继续用。回调里
+重入 `put` 可能触发进一步淘汰（回调嵌套回调），写回调时注意控制递归
+深度。
