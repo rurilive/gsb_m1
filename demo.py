@@ -6,7 +6,14 @@ Run with: python3 demo.py
 import os
 import tempfile
 
-from logpipe import JsonlFileSink, LogPipeline, get_path, walk_leaves
+from logpipe import (
+    JsonlFileSink,
+    LogPipeline,
+    MemorySink,
+    Redactor,
+    get_path,
+    walk_leaves,
+)
 
 
 def sample_records():
@@ -62,7 +69,52 @@ def main():
         print("pipeline stats:", pipeline.stats())
 
         # ---- extension demo slot ----
-        # Hook new pipeline capabilities in here once they land.
+        print("compliance redaction:")
+        redactor = Redactor([
+            {"path": "user.phone", "mask": "phone"},
+            # [?] masks every in-range payment index; an explicit index
+            # would be more specific and win over the wildcard.
+            {"path": "payments[?].card", "mask": "card", "bypass": True},
+        ])
+        redacted_path = os.path.join(tmp, "redacted.jsonl")
+        bypass_sink = MemorySink()
+        with JsonlFileSink(redacted_path) as redacted_sink:
+            secure = LogPipeline(redacted_sink)
+            secure.set_redactor(redactor)
+            secure.set_bypass_sink(bypass_sink)
+            for item in sample_records():
+                line = secure.emit(item)
+                print("  ", line)
+
+            # Rules hot reload: the old rule set is fully discarded.
+            redactor.load_rules([{"path": "user.phone", "mask": "all"}])
+            print()
+            print("  after reload:", secure.emit(sample_records()[0]))
+
+        print()
+        print("  originals bypassed to the audit sink:", len(bypass_sink.lines))
+        for line in bypass_sink.lines:
+            print("  ", line)
+
+        print()
+        print("  explain the payments record:")
+        explanation = redactor.explain(sample_records()[1])
+        for leaf in explanation["leaves"]:
+            if leaf["redacted"]:
+                print(
+                    "    %-22s masked by %s via %s"
+                    % (leaf["path"], leaf["mask"], leaf["rule"])
+                )
+        for rule in explanation["rules"]:
+            print(
+                "    rule %-22s %s (leaves=%d, containers=%d)"
+                % (
+                    rule["path"],
+                    rule["status"],
+                    rule["matched_leaves"],
+                    rule["matched_containers"],
+                )
+            )
 
 
 if __name__ == "__main__":
