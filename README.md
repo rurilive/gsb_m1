@@ -29,3 +29,10 @@
 python3 demo.py                          # 落库与投递演示
 python3 -m unittest discover -s tests -v # 行为基线测试
 ```
+
+## 实现说明
+
+- 退避：第 n 次失败后 `next_attempt_at = now + base_backoff * 2 ** (n - 1)`（指数退避），时刻全由注入 clock 计算，relay 不 sleep
+- 死信：单条连续失败达 `max_attempts` 即置 `dead`，不再投递，也不再阻塞同聚合键的后续事件
+- 租约：投递前 `claim(seq, owner, now, ttl)` 原子认领，租约期内其他 owner 抢不到；持有者崩溃则租约到期后他人接管，保证至少一次
+- 顺序：同一聚合键严格按 seq 升序投递，前一条重试中或被租用则后续一律等待，进死信才放行
