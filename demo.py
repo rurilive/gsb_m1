@@ -2,9 +2,11 @@
 
 第一段：典型版本号的解析结果。
 第二段：把依赖候选按 semver 优先级排序（含 prerelease）。
+第三段：用区间文本过滤候选并演示 best / overlaps / normalize。
 """
 
 from verkit.version import compare, parse_version
+from verkit.range import best, match, normalize, overlaps
 
 LOCKFILE = [
     "1.4.2",
@@ -36,8 +38,16 @@ def main():
     ]:
         print(f"  compare({a}, {b}) = {compare(a, b)}")
 
-    # TODO(区间支持): 实现区间匹配后，在这里用同一批候选版本演示
-    # 按区间文本过滤和 best() 挑选，直观展示哪些版本落在 ^1.2.0 || >=2.0.0 里。
+    print("\n=== 区间过滤与最优选择 ===")
+    for rng in ("^1.4.0", "~0.9.0", "^1.2.0 || >=2.0.0"):
+        hits = [s for s in LOCKFILE if match(s, rng)]
+        print(f"  {rng:<22} 命中: {', '.join(hits) or '(无)'}  best: {best(LOCKFILE, rng)}")
+
+    print("\n=== 区间求交与化简 ===")
+    print(f"  overlaps('^1.4.0', '~1.4.2') = {overlaps('^1.4.0', '~1.4.2')}")
+    print(f"  overlaps('^1.4.0', '^2.0.0') = {overlaps('^1.4.0', '^2.0.0')}")
+    print(f"  normalize('>=1.0.0 <2.0.0 || >=1.5.0 <3.0.0')"
+          f" = {normalize('>=1.0.0 <2.0.0 || >=1.5.0 <3.0.0')}")
 
 
 if __name__ == "__main__":
