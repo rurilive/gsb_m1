@@ -4,7 +4,15 @@
 窗口统计（每秒采样条数、每秒总条数），它给出下一个采样率。
 """
 
+import threading
 import time
+
+# 死区：每秒采样条数在目标上下 10% 以内就不动，流量小幅波动不跟着晃
+_DEADBAND = 0.10
+# 单步调整幅度上限：一次最多翻一倍、最多砍一半，峰谷都分几步靠过去，
+# 免得一个窗口的读数把采样率一步拽到地板上
+_MAX_STEP_UP = 2.0
+_MAX_STEP_DOWN = 0.5
 
 
 class RateController:
@@ -25,6 +33,7 @@ class RateController:
         self._min_rate = float(min_rate)
         self._max_rate = float(max_rate)
         self._clock = clock
+        self._lock = threading.Lock()
         self._rate = float(max_rate)
         self._updates = 0
 
@@ -34,26 +43,33 @@ class RateController:
 
     def rate(self):
         """当前生效的采样率。"""
-        return self._rate
+        with self._lock:
+            return self._rate
 
     def updates(self):
         """已经调整过多少次，排查时看它。"""
-        return self._updates
+        with self._lock:
+            return self._updates
 
     def observe(self, sampled_per_sec, total_per_sec):
         """拿最近一个窗口的统计推进一步，返回调整后的采样率。"""
-        if total_per_sec <= 0:
-            # 窗口里没有流量，没什么可调的
+        with self._lock:
+            if total_per_sec <= 0:
+                # 窗口里没有流量，没什么可调的
+                return self._rate
+            # 这一窗的总吞吐下，要贴住目标该有的采样率
+            desired = self._target / total_per_sec
+            desired = min(max(desired, self._min_rate), self._max_rate)
+            lower = self._target * (1.0 - _DEADBAND)
+            upper = self._target * (1.0 + _DEADBAND)
+            rate = self._rate
+            if sampled_per_sec > upper and rate > desired:
+                # 采超了，往 desired 压，一步最多砍一半
+                rate = max(desired, rate * _MAX_STEP_DOWN)
+            elif sampled_per_sec < lower and rate < desired:
+                # 采少了（包括峰值过去流量回落），往 desired 抬，一步最多翻一倍
+                rate = min(desired, rate * _MAX_STEP_UP)
+            if rate != self._rate:
+                self._rate = rate
+                self._updates += 1
             return self._rate
-        if sampled_per_sec <= 0:
-            # 这一窗一条都没采到，说明采样率压得过狠了
-            self._rate = self._max_rate
-            self._updates += 1
-            return self._rate
-        if sampled_per_sec > self._target:
-            # 采样量超了，按超出比例把采样率压回去
-            self._rate = self._rate * self._target / sampled_per_sec
-            if self._rate < self._min_rate:
-                self._rate = self._min_rate
-            self._updates += 1
-        return self._rate

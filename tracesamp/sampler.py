@@ -5,7 +5,6 @@
 应该拿到同一个结论。
 """
 
-import random
 import threading
 import time
 import zlib
@@ -24,6 +23,12 @@ SAMPLED_KEY = "sampled"
 _BUCKETS = 2
 # 控制点间隔：取窗口的三分之一，免得每个 span 都去改采样率
 _CONTROL_DIVISOR = 3
+# 决策缓存：一条 trace 的结论至少保留这么久，跨度几秒的 span 才拿得到
+# 同一个答案；同时给缓存设上限，极端流量下内存也有顶
+_DECISION_TTL_MIN = 10.0
+_DECISION_TTL_WINDOWS = 5
+_DECISION_CACHE_MAX = 200000
+_DECISION_PRUNE_INTERVAL = 1.0
 
 
 def trace_unit(trace_id):
@@ -63,9 +68,14 @@ class TraceSampler:
         self._clock = clock
         self._window = SlidingWindow(window_seconds, _BUCKETS, clock)
         self._controller = RateController(target_per_sec, clock=clock)
-        self._rng = random.Random()
         self._lock = threading.Lock()
+        self._control_lock = threading.Lock()
+        self._decision_lock = threading.Lock()
+        self._decisions = {}
+        self._decision_ttl = max(_DECISION_TTL_MIN,
+                                 _DECISION_TTL_WINDOWS * self._window_seconds)
         self._last_control = clock()
+        self._last_prune = self._last_control
         self._total = 0
         self._sampled = 0
 
@@ -100,6 +110,7 @@ class TraceSampler:
             mode = self._mode
             total = self._total
             sampled = self._sampled
+        window = self._window.counts((TOTAL_KEY, SAMPLED_KEY))
         return {
             "mode": mode,
             "rate": self.rate(),
@@ -107,8 +118,8 @@ class TraceSampler:
             "total": total,
             "sampled": sampled,
             "dropped": total - sampled,
-            "window_total": self._window.count(TOTAL_KEY),
-            "window_sampled": self._window.count(SAMPLED_KEY),
+            "window_total": window[TOTAL_KEY],
+            "window_sampled": window[SAMPLED_KEY],
             "updates": self._controller.updates(),
         }
 
@@ -124,23 +135,58 @@ class TraceSampler:
         return keep
 
     def _adaptive_decision(self, trace_id):
-        """自适应：按当前采样率决定，采到的进窗口的 sampled 账。"""
+        """自适应：结论按 trace 缓存，同一条 trace 的 span 早晚到都一样。"""
+        now = self._clock()
+        keep = self._decision_for(trace_id, now)
         with self._lock:
             self._total += 1
-        self._window.add(TOTAL_KEY)
-        keep = self._rng.random() < self._controller.rate()
-        if keep:
-            with self._lock:
+            if keep:
                 self._sampled += 1
+        self._window.add(TOTAL_KEY)
+        if keep:
             self._window.add(SAMPLED_KEY)
-        now = self._clock()
-        if now - self._last_control >= self._control_seconds:
-            self._last_control = now
-            self._step()
+        self._maybe_control(now)
         return keep
 
-    def _step(self):
-        """把最近一窗的统计喂给控制器。"""
-        sampled = self._window.per_second(SAMPLED_KEY)
-        total = self._window.per_second(TOTAL_KEY)
-        self._controller.observe(sampled, total)
+    def _decision_for(self, trace_id, now):
+        """拿这条 trace 的自适应结论，缓存里没有就按当前采样率算一条存起来。
+
+        结论由 trace_id 的稳定小数跟采样率比大小得出，跟静态模式同一套
+        比法；缓存把结论钉住，采样率随后怎么调都不影响已经在路上的 span。
+        """
+        with self._decision_lock:
+            entry = self._decisions.get(trace_id)
+            if entry is not None and entry[1] > now:
+                return entry[0]
+            keep = trace_unit(trace_id) < self._controller.rate()
+            self._decisions[trace_id] = (keep, now + self._decision_ttl)
+            if (len(self._decisions) > _DECISION_CACHE_MAX
+                    and now - self._last_prune >= _DECISION_PRUNE_INTERVAL):
+                self._last_prune = now
+                self._prune_decisions(now)
+            return keep
+
+    def _prune_decisions(self, now):
+        """先清过期项，还超上限就按写入先后挤掉最旧的。调用方已持锁。"""
+        expired = [tid for tid, (_, deadline) in self._decisions.items()
+                   if deadline <= now]
+        for tid in expired:
+            del self._decisions[tid]
+        overflow = len(self._decisions) - _DECISION_CACHE_MAX
+        if overflow > 0:
+            for tid in list(self._decisions)[:overflow]:
+                del self._decisions[tid]
+
+    def _maybe_control(self, now):
+        """到控制点了就把最近一窗的统计喂给控制器，多线程只放一路进去。"""
+        if now - self._last_control < self._control_seconds:
+            return
+        with self._control_lock:
+            now = self._clock()
+            if now - self._last_control < self._control_seconds:
+                return
+            self._last_control = now
+            window, covered = self._window.readings((SAMPLED_KEY, TOTAL_KEY))
+            self._controller.observe(
+                window[SAMPLED_KEY] / covered,
+                window[TOTAL_KEY] / covered)
