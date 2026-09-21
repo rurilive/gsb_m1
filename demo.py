@@ -1,12 +1,16 @@
-"""msglz 现状演示。
+"""msglz 演示。
 
 第一段：造一小批总线短消息，逐条独立压缩，看看每条的编码尺寸。
-第二段：预留的预共享字典演示位子（见文末注释）。
+第二段：预共享字典训练与版本管理——训练耗时、字典体积、实测比率、
+不达标自动退回，以及多版本/老帧兼容。
 """
 
 import random
+import tempfile
+import time
 
-from msglz import MessageCodec
+from msglz import DictStore, MessageCodec
+from msglz import train_dictionary
 
 #: 语料里时间戳的起点，固定住好复现。
 BASE_TS = 1758300000
@@ -82,9 +86,66 @@ def main():
     print("  消息数=%d 解码数=%d 比率=%.3f" % (
         st["messages"], st["decoded"], st["ratio"]))
 
-    # TODO(预共享字典): 字典训练与版本管理落地后，在这里加第二段演示：
-    # 同一批语料训练出字典要多久、字典多大；带字典与不带字典各压一遍的
-    # 实测比率；新字典不达标时自动退回上一版的报告。
+    print()
+
+    # ===== 第二段：预共享字典 =====
+    with tempfile.TemporaryDirectory() as directory:
+        store = DictStore(directory, max_versions=4, min_gain=0.05)
+        train_corpus = make_corpus(400, seed=7)
+        eval_corpus = make_corpus(200, seed=23)
+
+        print("=== 预共享字典：首次 rollout ===")
+        report = store.rollout(train_corpus)
+        print("  训练 %d 条耗时 %.3f 秒，字典体积 %d 字节（上限 %d）"
+              % (report["train_samples"], report["train_seconds"],
+                 report["dict_size"], store.max_size))
+        print("  评测 %d 条：无字典比率 %.3f（%d 字节）-> 带字典比率 %.3f"
+              "（%d 字节）"
+              % (report["eval_samples"], report["baseline_ratio"],
+                 report["baseline_bytes"], report["candidate_ratio"],
+                 report["candidate_bytes"]))
+        print("  绝对收益 %.3f，门槛 %.2f：%s，现役版本=%s"
+              % (report["gain"], report["min_gain"],
+                 "上线" if report["promoted"] else "退回",
+                 store.active_version))
+
+        encoded = [store.encode(message) for message in eval_corpus]
+        raw = sum(len(message) for message in eval_corpus)
+        plain = sum(len(MessageCodec().encode(message))
+                    for message in eval_corpus)
+        packed = sum(len(frame) for frame in encoded)
+        print("=== 换一拨没参与训练的流量（%d 条） ===" % len(eval_corpus))
+        print("  原文 %d 字节；无字典 %d 字节（%.3f）；带字典 %d 字节（%.3f）"
+              % (raw, plain, plain / raw, packed, packed / raw))
+        print("  带字典比无字典省 %.1f%%，第一条 %d -> %d 字节"
+              % ((1 - packed / plain) * 100,
+                 len(eval_corpus[0]), len(encoded[0])))
+        for index in (0, 5, 20, 77):
+            if store.decode(encoded[index]) != eval_corpus[index]:
+                raise SystemExit("第 %d 条解出来跟原文不一致" % index)
+        print("  抽样解回逐字节一致；无字典老帧也照解：%s"
+              % (store.decode(codec.encode(eval_corpus[1]))
+                 == eval_corpus[1]))
+
+        print("=== 不达标 rollout：拿随机噪声训一版 ===")
+        rnd = random.Random(99)
+        junk = [rnd.randbytes(120) for _ in range(200)]
+        before = store.active_version
+        rejected = store.rollout(junk)
+        print("  候选版本 %d 字典体积 %d，收益 %.4f"
+              % (rejected["version"], rejected["dict_size"],
+                 rejected["gain"]))
+        print("  %s（现役仍是版本 %s）：%s"
+              % ("上线" if rejected["promoted"] else "原样退回",
+                 store.active_version, rejected["reason"]))
+        assert not rejected["promoted"] and before == store.active_version
+
+        print("=== 一万条训练的耗时口径 ===")
+        big = make_corpus(10000, seed=13)
+        started = time.perf_counter()
+        dictionary = train_dictionary(big, store.max_size)
+        print("  10000 条训练 %.3f 秒，字典 %d 字节"
+              % (time.perf_counter() - started, len(dictionary)))
 
 
 if __name__ == "__main__":

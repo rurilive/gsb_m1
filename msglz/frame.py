@@ -3,13 +3,16 @@
 帧是消息在总线上传输的最小单元，自包含，收到就能解：
 
     b"MZ1"     3 字节魔数
-    种类       1 字节：0 原文直存，1 LZ 压缩体
+    种类       1 字节：0 原文直存，1 LZ 压缩体，2 带字典 LZ 压缩体
     raw_len    varint，原文长度
     payload    压缩体或原文
     校验和     4 字节大端，原文的 FNV-1a 32 位
 
 校验和算的是原文，不是压缩体：压缩体再坏也能靠它兜住，解出来跟
 原文对不上就报错。
+
+种类 2 的 payload 第一个 varint 是字典版本号，后面才是 LZ token 流；
+压缩时该版本的字典当 preset，收端按版本号取同一份字典还原。
 """
 
 from .errors import FormatError
@@ -24,6 +27,9 @@ KIND_RAW = 0
 #: 种类：LZ 压缩体。
 KIND_LZ = 1
 
+#: 种类：带字典版本的 LZ 压缩体。
+KIND_LZ_DICT = 2
+
 _CHECKSUM_LEN = 4
 
 
@@ -37,7 +43,7 @@ def fnv32(data):
 
 def pack_frame(kind, raw_len, payload, checksum):
     """拼一个帧。checksum 由调用方算好（原文的 fnv32）。"""
-    if kind not in (KIND_RAW, KIND_LZ):
+    if kind not in (KIND_RAW, KIND_LZ, KIND_LZ_DICT):
         raise ValueError("未知帧种类 %r" % (kind,))
     head = MAGIC + bytes([kind]) + encode_varint(raw_len)
     return head + bytes(payload) + checksum.to_bytes(_CHECKSUM_LEN, "big")
@@ -51,7 +57,7 @@ def unpack_frame(frame):
     if not frame.startswith(MAGIC):
         raise FormatError("魔数不匹配，不是 msglz 帧")
     kind = frame[len(MAGIC)]
-    if kind not in (KIND_RAW, KIND_LZ):
+    if kind not in (KIND_RAW, KIND_LZ, KIND_LZ_DICT):
         raise FormatError("未知帧种类 %d" % kind)
     raw_len, pos = decode_varint(frame, len(MAGIC) + 1)
     tail = len(frame) - _CHECKSUM_LEN
