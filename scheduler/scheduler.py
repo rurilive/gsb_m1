@@ -48,6 +48,7 @@ class Scheduler:
     def remove(self, task_id: str) -> None:
         with self._lock:
             self._tasks.pop(task_id, None)
+            self._inflight.discard(task_id)
 
     def pause(self, task_id: str) -> None:
         with self._lock:
@@ -120,20 +121,21 @@ class Scheduler:
                         continue
                     if task.next_run <= now:
                         late = (now - task.next_run).total_seconds()
-                        if late >= self._misfire_grace:
+                        if late <= self._misfire_grace:
                             self._inflight.add(task.id)
                             self._queue.put((task.id, task.generation))
-                        task.next_run = task.trigger.next_after(task.next_run)
+                        task.next_run = task.trigger.next_after(now)
             self._clock.sleep(self._tick)
 
     def _worker(self) -> None:
         while not self._stopping:
             try:
-                task_id, _gen = self._queue.get(timeout=0.05)
+                task_id, gen = self._queue.get(timeout=0.05)
             except queue.Empty:
                 continue
             with self._lock:
                 task = self._tasks.get(task_id)
                 self._inflight.discard(task_id)
-            if task is not None:
+                stale = task is None or task.paused or task.generation != gen
+            if not stale:
                 task.fn()
