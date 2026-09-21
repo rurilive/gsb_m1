@@ -11,12 +11,16 @@ from snapwire.snapshot import (
     take_snapshot,
 )
 from snapwire.sync import Channel, ChannelBroken, sync_full
+from snapwire.transfer import BlockIndex, Receiver, Sender
 
 __all__ = [
+    "BlockIndex",
     "Change",
     "Channel",
     "ChannelBroken",
     "Entry",
+    "Receiver",
+    "Sender",
     "Snapshot",
     "compare_snapshots",
     "hash_bytes",

@@ -30,3 +30,16 @@
 python3 demo.py                          # 现状演示
 python3 -m unittest discover -s tests -v # 行为基线测试
 ```
+
+## 块级增量传输（snapwire/transfer.py）
+
+- `BlockIndex(block_size)` 是内容寻址块仓：`put` 按 sha256 存块、同内容
+  只存一份、跨文件复用，`get`/`has` 按摘要取查，`stats()` 报存块数与字节数
+- `Sender(index, channel)`：`plan(path)` 流式扫文件出块清单（只留摘要，
+  内存不随文件涨）；`push(manifest)` 回应通道里的取块请求，只推接收端
+  仓里缺的块，仓里没缓存就流式重读源文件按摘要匹配，一批最多 16 块
+- `Receiver(index, channel)`：`apply(manifest, dst)` 收块校验入仓，校验
+  不过只回请那一块；缺块发请求等下一轮，齐了写临时文件再 `os.replace`
+  原子替换，失败与并发写都不留半截；dst 已是最新就直接收工不重写
+- 断了重跑：已确认入仓的块不再请求也不再写，换条通道接着跑就补齐
+- 对拍：随机改动下与 `sync_full` 结果逐字节一致，搬运量只跟改动范围走
