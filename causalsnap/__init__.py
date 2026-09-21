@@ -1,5 +1,5 @@
 """causalsnap: 多进程共享状态的进程内骨架。"""
 
-from .store import CausalStore, Event
+from .store import CausalStore, Event, Snapshot, compare
 
-__all__ = ["CausalStore", "Event"]
+__all__ = ["CausalStore", "Event", "Snapshot", "compare"]
