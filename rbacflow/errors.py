@@ -19,3 +19,11 @@ class DuplicateGrant(PolicyError):
 
 class NotGranted(PolicyError):
     """撤销一条没有授予过的授权。"""
+
+
+class DuplicateDeny(PolicyError):
+    """同一个角色对同一个动作模式重复拒绝。"""
+
+
+class InheritanceCycle(PolicyError):
+    """继承关系串成了环：子角色已经是父角色的祖先。"""
