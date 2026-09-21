@@ -28,48 +28,50 @@ class Tree:
         self.unresolved = unresolved
 
 
-def _nearest_previous(nodes, node):
-    """同 trace 里开始时间不晚于 node 的最近一条，排除自身。"""
-    best = None
-    for other in nodes:
-        if other is node or other.span.trace_id != node.span.trace_id:
-            continue
-        if other.span.start_ms > node.span.start_ms:
-            continue
-        if best is None or other.span.start_ms > best.span.start_ms:
-            best = other
-    return best
-
-
 def build_tree(trace_id, spans):
-    """把一条 trace 的 span 挂成 Tree。"""
-    nodes = [Node(span) for span in spans]
+    """把一条 trace 的 span 挂成 Tree。
 
-    def node_of(span_id):
-        for node in nodes:
-            if node.span.span_id == span_id:
-                return node
-        return None
+    只按 ``parent_id`` 挂接：父缺失（始终没到、跨 trace 指向）或参与
+    成环的 span 不会硬挂到别的链路上，连同环上其它 span 一并放进
+    ``Tree.unresolved``，一条都不丢。兄弟与根都按
+    ``(start_ms, span_id)`` 排序，因此结果与到达顺序无关。
+    """
+    nodes = {span.span_id: Node(span) for span in spans}
 
     roots = []
-    for node in nodes:
-        span = node.span
-        parent = None
-        if span.parent_id is not None:
-            parent = node_of(span.parent_id)
-        if parent is None:
-            # 父不在数据里，或者压根没有 parent_id（跨进程上报常丢这个字段）：
-            # 按开始时间就近挂到同 trace 里前一条 span 上，别让子树浮在根上
-            parent = _nearest_previous(nodes, node)
-        if parent is None:
+    for span_id, node in nodes.items():
+        parent_id = node.span.parent_id
+        if parent_id is None:
             roots.append(node)
         else:
-            parent.children.append(node)
+            parent = nodes.get(parent_id)
+            if parent is not None:
+                parent.children.append(node)
 
-    for node in nodes:
-        node.children.sort(key=lambda child: child.span.start_ms)
+    # 从所有根出发做可达性遍历：能走到的才是树上的节点。指向缺失父的
+    # span、互指成环的 span 都不可达，既不会进树也不会被丢。
+    reachable = set()
+    stack = list(roots)
+    while stack:
+        node = stack.pop()
+        if id(node) in reachable:
+            continue
+        reachable.add(id(node))
+        stack.extend(node.children)
 
-    return Tree(trace_id, roots, [])
+    order_key = lambda node: (node.span.start_ms, node.span.span_id)
+    for node in nodes.values():
+        node.children.sort(key=order_key)
+    roots.sort(key=order_key)
+
+    unresolved = [node for node in nodes.values()
+                  if id(node) not in reachable]
+    unresolved.sort(key=order_key)
+    # unresolved 之间不允许保留父子挂接（可能成环），渲染与统计只看 roots。
+    for node in unresolved:
+        node.children = []
+
+    return Tree(trace_id, roots, unresolved)
 
 
 def build_trees(by_trace):

@@ -11,7 +11,8 @@ from .model import Span
 class SpanStore:
     """到达顺序不定、可能重传的 span 缓冲。
 
-    父 span 已经在缓冲里的记录直接入册；父还没到的先搁一边。
+    记录到达时一律入册，父 span 晚到也不丢弃，挂树交给 builder 在
+    ``traces()`` 时统一处理；重复 span_id 的重传只保留先到的一条。
     """
 
     def __init__(self):
@@ -23,9 +24,6 @@ class SpanStore:
         for record in records:
             span = Span.from_record(record)
             if span.span_id in self._by_id:
-                continue
-            if span.parent_id is not None and span.parent_id not in self._by_id:
-                # 父 span 还没到：这条先不要了
                 continue
             self._by_id[span.span_id] = span
             self._by_trace.setdefault(span.trace_id, []).append(span)

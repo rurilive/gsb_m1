@@ -56,8 +56,14 @@ class Span:
 
     @property
     def duration_ms(self):
-        """这次调用的耗时，毫秒。"""
-        return self.end_ms - self.start_ms
+        """这次调用的耗时，毫秒；时钟回拨采出负值时按 0 计。"""
+        delta = self.end_ms - self.start_ms
+        return delta if delta > 0 else 0
+
+    @property
+    def clock_skew(self):
+        """采集端时钟回拨（end_ms < start_ms）。"""
+        return self.end_ms < self.start_ms
 
     def __repr__(self):
         return "Span(%s/%s)" % (self.trace_id, self.span_id)
