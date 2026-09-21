@@ -48,3 +48,13 @@ cache.hit_rate()                         # hits / (hits + misses)
 python3 demo.py                           # 现状演示
 python3 -m unittest discover -s tests     # 行为基线测试
 ```
+
+## 并发说明
+
+多线程网关共用同一个实例是安全的：所有公有操作（含 `size`/`keys`/
+`snapshot`/`stats` 这些读取）都整段罩在同一把可重入锁里，字典和链表
+要么一起变要么一起不变，任何时刻采样 `size()` 都不会越过 `capacity`。
+淘汰回调在持锁状态下同步触发，回调里可以再调本实例的 `get`/`put`/
+`delete`（可重入，不会把自己锁死）；回调抛出的异常照抛给调用方，
+缓存本身保持自洽、可继续用。接口、计数口径和淘汰次序与单线程参考
+实现 `PlainLRU` 逐条对齐，对拍用例见 `tests/test_concurrency.py`。

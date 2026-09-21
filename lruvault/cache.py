@@ -1,4 +1,5 @@
-"""采集服务在用的 LRU 缓存。上个月接入多线程网关时加了一把锁。"""
+"""采集服务在用的 LRU 缓存。多线程网关共用同一个实例，靠一把可重入锁
+把所有公有操作整个罩住：字典和链表要么一起变，要么一起不变。"""
 
 import threading
 
@@ -19,7 +20,9 @@ class LRUCache:
             raise ValueError("capacity 至少为 1")
         self._capacity = int(capacity)
         self._on_evict = on_evict
-        self._lock = threading.Lock()
+        # 可重入：淘汰回调在持锁状态下同步触发，回调里允许再调本实例的
+        # get/put/delete，不会把自己锁死。
+        self._lock = threading.RLock()
         self._data = {}
         self._order = OrderList()
         self._hits = 0
@@ -33,58 +36,55 @@ class LRUCache:
         return self._capacity
 
     def __len__(self):
-        return len(self._data)
+        with self._lock:
+            return len(self._data)
 
     def __contains__(self, key):
-        return key in self._data
+        with self._lock:
+            return key in self._data
 
     def size(self):
         """当前键数。"""
-        return len(self._data)
+        with self._lock:
+            return len(self._data)
 
     def keys(self):
         """从新到旧列出键。"""
-        return [node.key for node in self._order.nodes()]
+        with self._lock:
+            return [node.key for node in self._order.nodes()]
 
     def snapshot(self):
         """从新到旧列出 (key, value)，本身不动新旧次序。"""
-        return [(node.key, node.value) for node in self._order.nodes()]
+        with self._lock:
+            return [(node.key, node.value) for node in self._order.nodes()]
 
     def contains(self, key):
-        return key in self._data
+        with self._lock:
+            return key in self._data
 
     def get(self, key, default=None):
         """命中就把键挪到最新并返回值，不命中给 default。"""
-        node = self._data.get(key)
-        if node is None:
-            with self._lock:
-                self._misses += 1
-            return default
         with self._lock:
+            node = self._data.get(key)
+            if node is None:
+                self._misses += 1
+                return default
             self._hits += 1
-        self._order.touch(node)
-        return node.value
+            self._order.touch(node)
+            return node.value
 
     def put(self, key, value):
         """写入或覆盖；顺带把超额的旧键淘汰掉。"""
         if key is None or value is None:
             raise ValueError("key 和 value 都不能是 None")
-        node = self._data.get(key)
-        if node is not None:
-            with self._lock:
+        with self._lock:
+            node = self._data.get(key)
+            if node is not None:
                 node.value = value
                 self._puts += 1
-            self._order.touch(node)
-            return
-        fresh = Node(key, value)
-        with self._lock:
-            current = self._data.get(key)
-            if current is not None:
-                current.value = value
-                self._puts += 1
-                self._hits += 1
-                self._order.touch(current)
+                self._order.touch(node)
                 return
+            fresh = Node(key, value)
             self._data[key] = fresh
             self._order.push_front(fresh)
             self._puts += 1
@@ -92,19 +92,20 @@ class LRUCache:
 
     def delete(self, key):
         """删掉键，返回是否真删到了；不触发淘汰回调。"""
-        node = self._data.pop(key, None)
-        if node is None:
-            return False
-        self._order.unlink(node)
-        node.clear()
         with self._lock:
+            node = self._data.pop(key, None)
+            if node is None:
+                return False
+            self._order.unlink(node)
+            node.clear()
             self._deletes += 1
-        return True
+            return True
 
     def stats(self):
         """当前计数快照。"""
-        return Stats(self._hits, self._misses, self._evictions,
-                     self._puts, self._deletes, len(self._data))
+        with self._lock:
+            return Stats(self._hits, self._misses, self._evictions,
+                         self._puts, self._deletes, len(self._data))
 
     def hit_rate(self):
         """命中率，口径见 stats.py。"""
