@@ -34,13 +34,19 @@ class Resolver:
 
     def resolve(self, requests):
         """返回拓扑序的 "name@version" 列表。"""
-        for name in set(requests):
+        seen = set()
+        for name in requests:
+            if name in seen:
+                continue
+            seen.add(name)
             self._visit(name)
         for name in self._order:
             self._chosen[name] = self._select_version(name)
         return [f"{name}@{self._chosen[name]}" for name in self._order]
 
     def _visit(self, name):
+        if name not in self._manifest:
+            raise UnknownPackageError(f"请求了不存在的包 {name}")
         if name in self._done:
             return
         if name in self._visiting:
@@ -48,8 +54,6 @@ class Resolver:
             raise CircularDependencyError(chain)
         self._visiting.append(name)
         for dep in self._direct_deps(name):
-            if dep == name:
-                continue
             req_name, constraints = parse_requirement(dep)
             if req_name not in self._manifest:
                 raise UnknownPackageError(f"{name} 依赖了不存在的包 {req_name}")
@@ -64,8 +68,7 @@ class Resolver:
         deps = list(spec.get("depends") or [])
         optional = spec.get("optional_depends") or []
         if optional:
-            enabled = [d for d in optional if parse_requirement(d)[0] in self._enabled]
-            deps.extend(enabled or optional)
+            deps.extend(d for d in optional if parse_requirement(d)[0] in self._enabled)
         return deps
 
     def _select_version(self, name):
@@ -73,13 +76,21 @@ class Resolver:
         if not versions:
             raise UnknownPackageError(f"{name} 没有可用版本")
         constraints = self._constraints.get(name) or []
-        if not constraints:
-            return max(versions, key=parse_version)
-        best = None
-        for constraint, _requirer in constraints:
-            for version in versions:
-                if satisfies(version, constraint):
-                    best = version
-        if best is None:
-            raise ConflictError(f"{name}: 没有版本能满足全部约束")
-        return best
+        candidates = [
+            version
+            for version in versions
+            if all(satisfies(version, constraint) for constraint, _ in constraints)
+        ]
+        if not candidates:
+            detail = ", ".join(
+                f"{requirer} 要求 {name}{self._format_constraint(constraint)}"
+                for constraint, requirer in constraints
+            )
+            raise ConflictError(f"{name}: 没有版本能同时满足全部约束（{detail}）")
+        return max(candidates, key=parse_version)
+
+    @staticmethod
+    def _format_constraint(constraint):
+        if not constraint:
+            return "（任意版本）"
+        return ",".join(f"{op}{'.'.join(str(p) for p in target)}" for op, target in constraint)
