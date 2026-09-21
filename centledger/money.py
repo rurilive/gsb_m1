@@ -17,11 +17,19 @@ def to_cents(amount):
     """把金额换算成整数分，四舍五入到分。
 
     amount 可以是 int、str、Decimal 或 float，返回 int。
+    解析全程走 Decimal，不经过 float，十几位的大金额也不丢精度。
     """
-    try:
-        value = Decimal(str(float(amount)))
-    except (TypeError, ValueError) as exc:
-        raise MoneyError("金额换算不了: %r" % (amount,)) from exc
+    if isinstance(amount, Decimal):
+        value = amount
+    elif isinstance(amount, float):
+        value = Decimal(str(amount))
+    elif isinstance(amount, (int, str)):
+        try:
+            value = Decimal(amount)
+        except ArithmeticError as exc:
+            raise MoneyError("金额换算不了: %r" % (amount,)) from exc
+    else:
+        raise MoneyError("金额换算不了: %r" % (amount,))
     if not value.is_finite():
         raise MoneyError("金额必须是有限值: %r" % (amount,))
     return int(value.quantize(CENT, rounding=ROUND_HALF_UP) * 100)

@@ -1,7 +1,10 @@
-"""多账户账本：按批接收分摊请求，维护余额并提供对账。"""
+"""多账户账本：按批接收分摊请求，维护余额并提供对账。
 
-from .allocate import allocate, as_amount, as_weight
-from .money import ZERO, format_cents, from_cents, to_cents
+账本内部一律用整数分记账，Decimal 金额只在进出账本的边界上换算。
+"""
+
+from .allocate import allocate_cents, as_amount, as_weight
+from .money import format_cents, from_cents, to_cents
 
 
 class BatchRequest(object):
@@ -39,10 +42,10 @@ class BatchResult(object):
     def render(self):
         """批次结果的文本表示，对账系统按文本逐字节比对。"""
         lines = ["batch %s" % self.batch_id]
-        for account, credit in self.credits.items():
+        for account in sorted(self.credits):
             lines.append("%s credit=%s balance=%s" % (
                 account,
-                format_cents(to_cents(credit)),
+                format_cents(to_cents(self.credits[account])),
                 format_cents(to_cents(self.balances[account])),
             ))
         return "\n".join(lines) + "\n"
@@ -81,52 +84,96 @@ class ReconcileReport(object):
 
 
 class Ledger(object):
-    """按批记账的账户集合。"""
+    """按批记账的账户集合。
+
+    内部余额、入账总额都是整数分；批次号幂等，同一个 batch_id
+    重放时直接返回首次的结果，不重复记账。
+    """
 
     def __init__(self):
         self._balances = {}
-        self._total_in = ZERO
+        self._total_in_cents = 0
         self._requests = 0
+        self._batches = {}
 
     def balance(self, account):
         """单个账户当前的余额。"""
-        return self._balances.get(account, ZERO)
+        return from_cents(self._balances.get(account, 0))
 
     def balances(self):
         """全部账户余额的副本。"""
-        return dict(self._balances)
+        return {
+            account: from_cents(cents)
+            for account, cents in self._balances.items()
+        }
 
     def apply_batch(self, batch_id, requests):
-        """把一批请求记进账本，返回 BatchResult。"""
-        credits = {}
+        """把一批请求记进账本，返回 BatchResult。
+
+        同一个 batch_id 重放时返回首次的结果，余额、请求数、入账
+        总额都不重复累计，输出文本逐字节相同。整批先校验再记账，
+        校验不过整批不落账。
+        """
+        if batch_id in self._batches:
+            return self._batches[batch_id]
+        prepared = []
         for request in requests:
-            self._post(request, credits)
+            weights = request.weights
+            if not weights:
+                raise ValueError("请求里没有账户")
+            accounts = sorted(weights)
+            prepared.append((
+                request,
+                accounts,
+                [as_weight(weights[account]) for account in accounts],
+            ))
+        credits = {}
+        for request, accounts, parsed_weights in prepared:
+            self._post(request, accounts, parsed_weights, credits)
         balances = {}
         for account, credit in credits.items():
-            balance = self._balances.get(account, ZERO) + credit
+            balance = self._balances.get(account, 0) + credit
             self._balances[account] = balance
             balances[account] = balance
         self._requests += len(requests)
-        return BatchResult(batch_id, credits, balances)
+        result = BatchResult(
+            batch_id,
+            {account: from_cents(credit)
+             for account, credit in credits.items()},
+            {account: from_cents(balance)
+             for account, balance in balances.items()},
+        )
+        self._batches[batch_id] = result
+        return result
 
     def reconcile(self):
         """把请求总额和账户余额合起来对一遍。"""
-        total_out = sum(self._balances.values(), ZERO)
-        return ReconcileReport(self._requests, self._total_in, total_out)
+        total_out = sum(self._balances.values(), 0)
+        return ReconcileReport(
+            self._requests,
+            from_cents(self._total_in_cents),
+            from_cents(total_out),
+        )
 
-    def _post(self, request, credits):
-        weights = request.weights
-        if not weights:
-            raise ValueError("请求里没有账户")
+    def _post(self, request, accounts, parsed_weights, credits):
         total_cents = to_cents(request.total)
-        self._total_in += from_cents(total_cents)
+        self._total_in_cents += total_cents
         if total_cents == 0:
+            # 总额折到分之后是零（含不足一分的请求）：各户记一笔
+            # 零，账面留个痕迹，请求照常计数
+            for account in accounts:
+                credits.setdefault(account, 0)
             return
-        allocation = allocate(from_cents(total_cents), list(weights.values()))
-        for account, share in zip(weights, allocation.shares):
-            # 入账前把份额折到分，别把更细的尾巴带进余额
-            credits[account] = credits.get(account, ZERO) + from_cents(to_cents(share))
-        residual = allocation.residual
-        if residual < 0:
-            target = min(weights, key=lambda name: as_weight(weights[name]))
-            credits[target] = credits.get(target, ZERO) + residual
+        shares, residual, weight_ints = allocate_cents(
+            total_cents, parsed_weights)
+        if residual and max(weight_ints) > 0:
+            # 尾差归权重最大的账户；accounts 已按账户名排序，并列时
+            # 取下标最小的，即账户名排序靠前的。权重全为零时整笔
+            # 挂账，尾差不落给任何账户。
+            target = max(
+                range(len(accounts)),
+                key=lambda index: (weight_ints[index], -index),
+            )
+            shares[target] += residual
+        for account, share in zip(accounts, shares):
+            credits[account] = credits.get(account, 0) + share
