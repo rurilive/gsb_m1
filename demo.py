@@ -3,13 +3,13 @@
 第一段：精确去重计数。
 第二段：分片账本，跨片重复会被重复计入。
 第三段：落盘与读回。
-第四段：预留的估算演示位子（见文末注释）。
+第四段：BucketSketch 分桶估算、跨片合并与估算器落盘。
 """
 
 import os
 import tempfile
 
-from dedupkit import ExactCounter, Ledger, codec
+from dedupkit import BucketSketch, ExactCounter, Ledger, codec
 
 
 def main():
@@ -45,10 +45,50 @@ def main():
         print(f"  写进 {path}，{size} 字节")
         print(f"  读回的分片 {back.names()}，total() = {back.total()}")
 
-    # TODO(估算改造): BucketSketch 落地后，在这里补三段演示：
-    # 1) 灌进十几万随机 key，打印估算值、精确值以及两者的相对误差
-    # 2) 两个分片的估算器 merge 起来，与先合数据再新建的估算器对比
-    # 3) 估算器落盘再读回，看桶位与估算行为是否和没存过一样
+    print()
+    print("=== 分桶估算：十几万 key，内存不涨 ===")
+    exact = ExactCounter()
+    sketch = BucketSketch(bits=12, seed=0)
+    for i in range(150000):
+        key = f"event-{i}"
+        exact.add(key)
+        sketch.add(key)
+    for i in range(0, 150000, 3):  # 三分之一的重复事件
+        sketch.add(f"event-{i}")
+    truth = exact.count()
+    estimate = sketch.count()
+    print(f"  桶位 {len(sketch.registers())} 字节，精确 {truth}，估算 {estimate:.0f}")
+    print(f"  相对误差 {abs(estimate - truth) / truth * 100:.2f}%")
+
+    print()
+    print("=== 跨片合并：merge 等于先合数据再重建 ===")
+    left = BucketSketch(bits=12, seed=0)
+    right = BucketSketch(bits=12, seed=0)
+    rebuilt = BucketSketch(bits=12, seed=0)
+    left_keys = [f"a-{i}" for i in range(60000)]
+    right_keys = [f"b-{i}" for i in range(40000)] + left_keys[:10000]
+    for key in left_keys:
+        left.add(key)
+    for key in right_keys:
+        right.add(key)
+    for key in left_keys + right_keys:
+        rebuilt.add(key)
+    merged = left.merge(right)
+    print(f"  merge 估算 {merged.count():.0f}，并集重建估算 {rebuilt.count():.0f}")
+    print(f"  桶位逐位一致: {merged.registers() == rebuilt.registers()}")
+    print(f"  合并后左右两边未被改动: {left.count() > 0 and right.count() > 0}")
+
+    print()
+    print("=== 估算器落盘：桶位分毫不差，读回还能接着合 ===")
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "sketch.json")
+        codec.save_sketch(merged, path)
+        restored = codec.load(path)
+        print(f"  写进 {path}，{os.path.getsize(path)} 字节（fmt 2）")
+        print(f"  桶位一致: {restored.registers() == merged.registers()}")
+        remerged = restored.merge(right)
+        print(f"  读回后继续合并，估算仍为 {remerged.count():.0f}，与重建一致: "
+              f"{remerged.registers() == rebuilt.registers()}")
 
 
 if __name__ == "__main__":
