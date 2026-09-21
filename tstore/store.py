@@ -1,178 +1,77 @@
-"""按条裸存的时间点仓库。
+"""时间点仓库门面：按文件魔数选裸存后端或压缩块后端。
 
-TsStore 把一个 (时间戳, 值) 序列按到达顺序写进本地文件，读出时按
-写入顺序返回。时间戳只许不减：等于上一条可以（重复时间戳合法），
-小于则整次写入被拒。磁盘布局见 layout.py。
-
-顺序读按批流式进行，不把整库读进内存；同一句柄上追加之后立刻读出，
-要能看到刚写的数据。
+已有裸存文件（TSRAW01）继续走 RawStore，追加规矩照旧、不迁移；
+新文件走 BlockStore 块压缩。block_size 只对新建的块文件生效，
+重开已有块文件时以文件头里记的块大小为准。
 """
 
 import os
 
-from .errors import OutOfOrderError
-from .layout import (
-    HEADER,
-    RECORD,
-    pack_record,
-    record_count,
-    unpack_record,
-    validate_header,
-)
-
-#: 顺序读时每批读多少条记录。
-_BATCH = 512
+from .blocks import BLOCK_MAGIC
+from .blockstore import DEFAULT_BLOCK_SIZE, BlockStore
+from .layout import HEADER
+from .raw import RawStore
 
 
 class TsStore:
-    """本地文件里的时间点序列。
+    """本地文件里的时间点序列，自动兼容裸存与块压缩两种格式。"""
 
-    path: 文件路径。不存在就新建，已存在就接着写。
-    """
-
-    def __init__(self, path):
-        self._path = str(path)
-        self._appends = 0
-        self._reads = 0
-        self._fh = None
-        try:
-            if os.path.exists(self._path) and os.path.getsize(self._path) > 0:
-                self._fh = open(self._path, "r+b")
-                self._fh.seek(0)
-                validate_header(self._fh.read(len(HEADER)))
+    def __init__(self, path, block_size=DEFAULT_BLOCK_SIZE):
+        path = str(path)
+        backend = None
+        if os.path.exists(path) and os.path.getsize(path) > 0:
+            with open(path, "rb") as fh:
+                magic = fh.read(len(HEADER))
+            if magic == HEADER:
+                backend = RawStore(path)
+            elif magic == BLOCK_MAGIC:
+                backend = BlockStore(path, block_size=block_size)
             else:
-                self._fh = open(self._path, "w+b")
-                self._fh.write(HEADER)
-                self._fh.flush()
-            self._fh.seek(0, os.SEEK_END)
-            self._count = record_count(self._fh.tell())
-            self._last_ts = self._peek_last_ts()
-        except Exception:
-            self.close()
-            raise
-
-    # ---- 写入 ----
+                # 交给后端报 TsFormatError，错误信息保持与基线一致。
+                backend = RawStore(path)
+        else:
+            backend = BlockStore(path, block_size=block_size)
+        self._backend = backend
 
     def append(self, ts, value):
-        """追加一条。时间戳小于上一条时抛 OutOfOrderError。"""
-        self._check_pair(ts, value)
-        if self._last_ts is not None and ts < self._last_ts:
-            raise OutOfOrderError(
-                "时间戳 %r 小于上一条 %r，拒绝写入" % (ts, self._last_ts)
-            )
-        self._write_pair(ts, value)
+        self._backend.append(ts, value)
 
     def append_many(self, pairs):
-        """整批追加。
-
-        先把整批校验一遍，任何一条类型不对或时间戳回退，整批拒绝，
-        文件一个字节都不动。
-        """
-        items = [(ts, value) for ts, value in pairs]
-        prev = self._last_ts
-        for ts, value in items:
-            self._check_pair(ts, value)
-            if prev is not None and ts < prev:
-                raise OutOfOrderError(
-                    "批内时间戳 %r 小于前一条 %r，整批拒绝" % (ts, prev)
-                )
-            prev = ts
-        for ts, value in items:
-            self._write_pair(ts, value)
-
-    @staticmethod
-    def _check_pair(ts, value):
-        if isinstance(ts, bool) or not isinstance(ts, int):
-            raise TypeError("时间戳必须是 int，收到 %r" % type(ts).__name__)
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
-            raise TypeError("值必须是 int 或 float，收到 %r" % type(value).__name__)
-
-    def _write_pair(self, ts, value):
-        self._fh.seek(0, os.SEEK_END)
-        self._fh.write(pack_record(ts, value))
-        self._count += 1
-        self._last_ts = ts
-        self._appends += 1
-
-    # ---- 读取 ----
+        self._backend.append_many(pairs)
 
     def read_at(self, index):
-        """按下标读一条，支持负数下标，越界抛 IndexError。"""
-        i = index + self._count if index < 0 else index
-        if i < 0 or i >= self._count:
-            raise IndexError("下标 %r 越界（共 %d 条）" % (index, self._count))
-        self._fh.seek(len(HEADER) + i * RECORD.size)
-        ts, value = unpack_record(self._fh.read(RECORD.size))
-        self._reads += 1
-        return (ts, value)
+        return self._backend.read_at(index)
 
     def find(self, ts):
-        """第一个时间戳不小于 ts 的下标；全都小于 ts 时返回 -1。
-
-        重复时间戳返回整段里最早的那条。
-        """
-        start = 0
-        self._fh.seek(len(HEADER))
-        while start < self._count:
-            n = min(_BATCH, self._count - start)
-            buf = self._fh.read(n * RECORD.size)
-            if not buf:
-                break
-            for k, (cur, _) in enumerate(RECORD.iter_unpack(buf)):
-                if cur >= ts:
-                    self._reads += 1
-                    return start + k
-            start += n
-        self._reads += 1
-        return -1
+        return self._backend.find(ts)
 
     def __iter__(self):
-        """按写入顺序流式迭代，一批一批读。"""
-        self._fh.seek(len(HEADER))
-        remaining = self._count
-        while remaining > 0:
-            n = min(_BATCH, remaining)
-            buf = self._fh.read(n * RECORD.size)
-            if not buf:
-                break
-            for pair in RECORD.iter_unpack(buf):
-                self._reads += 1
-                yield pair
-            remaining -= n
+        return iter(self._backend)
 
     def read_all(self):
-        """读出全部记录，返回 (时间戳, 值) 列表。"""
-        return list(self)
+        return self._backend.read_all()
 
     def __len__(self):
-        return self._count
-
-    # ---- 元信息 ----
+        return len(self._backend)
 
     @property
     def path(self):
-        """文件路径。"""
-        return self._path
+        return self._backend.path
 
     @property
     def last_ts(self):
-        """最后一条的时间戳，空库返回 None。"""
-        return self._last_ts
+        return self._backend.last_ts
+
+    @property
+    def block_size(self):
+        """块文件的每块条数；裸存文件返回 None。"""
+        return getattr(self._backend, "block_size", None)
 
     def stats(self):
-        """计数快照，返回新字典。"""
-        return {
-            "records": self._count,
-            "bytes_on_disk": len(HEADER) + self._count * RECORD.size,
-            "appends": self._appends,
-            "reads": self._reads,
-        }
+        return self._backend.stats()
 
     def close(self):
-        """刷盘并关闭，可重复调用。"""
-        if self._fh is not None and not self._fh.closed:
-            self._fh.flush()
-            self._fh.close()
+        self._backend.close()
 
     def __enter__(self):
         return self
@@ -180,10 +79,3 @@ class TsStore:
     def __exit__(self, exc_type, exc, tb):
         self.close()
         return False
-
-    def _peek_last_ts(self):
-        if self._count == 0:
-            return None
-        self._fh.seek(len(HEADER) + (self._count - 1) * RECORD.size)
-        ts, _ = unpack_record(self._fh.read(RECORD.size))
-        return ts
