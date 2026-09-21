@@ -4,7 +4,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-_LOCAL_TZ = ZoneInfo("Asia/Hong_Kong")
+_UTC = timezone.utc
+_LEGACY_TZ = ZoneInfo("Asia/Hong_Kong")
 
 
 def _dump_trigger(trigger) -> dict:
@@ -42,7 +43,8 @@ class Store:
             payload.append({
                 "id": task.id,
                 "trigger": _dump_trigger(task.trigger),
-                "next_run": task.next_run.astimezone(_LOCAL_TZ).replace(tzinfo=None).isoformat(),
+                "next_run": task.next_run.astimezone(_UTC).isoformat(),
+                "paused": task.paused,
             })
         Path(path).write_text(json.dumps(payload, ensure_ascii=False, indent=1))
 
@@ -55,8 +57,10 @@ class Store:
             trigger = _load_trigger(item["trigger"])
             next_run = datetime.fromisoformat(item["next_run"])
             if next_run.tzinfo is None:
-                next_run = next_run.replace(tzinfo=timezone.utc)
-            else:
-                next_run = next_run.astimezone(timezone.utc)
-            out[item["id"]] = Task(item["id"], trigger, lambda: None, next_run)
+                # 兼容旧版本写出的快照：旧格式把 UTC 时刻误存成香港墙钟裸时间，
+                # 这里按香港时区解读，避免老快照恢复后整体偏 8 小时。
+                next_run = next_run.replace(tzinfo=_LEGACY_TZ)
+            next_run = next_run.astimezone(_UTC)
+            out[item["id"]] = Task(item["id"], trigger, lambda: None, next_run,
+                                   paused=item.get("paused", False))
         return out

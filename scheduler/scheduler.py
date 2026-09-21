@@ -36,6 +36,7 @@ class Scheduler:
         self._lock = threading.RLock()
         self._stopping = False
         self._threads: list[threading.Thread] = []
+        self._generation = 0
 
     # ---- 对外 API ------------------------------------------------------------
     def add(self, task_id: str, trigger: Trigger, fn, paused: bool = False) -> None:
@@ -43,7 +44,10 @@ class Scheduler:
             if task_id in self._tasks:
                 raise ValueError(f"task 已存在: {task_id}")
             nxt = trigger.next_after(self._clock.now())
-            self._tasks[task_id] = Task(task_id, trigger, fn, nxt, paused)
+            self._generation += 1
+            task = Task(task_id, trigger, fn, nxt, paused)
+            task.generation = self._generation
+            self._tasks[task_id] = task
 
     def remove(self, task_id: str) -> None:
         with self._lock:
@@ -55,7 +59,8 @@ class Scheduler:
             if task is None:
                 raise KeyError(task_id)
             task.paused = True
-            task.generation += 1
+            self._generation += 1
+            task.generation = self._generation
 
     def resume(self, task_id: str) -> None:
         with self._lock:
@@ -63,7 +68,8 @@ class Scheduler:
             if task is None:
                 raise KeyError(task_id)
             task.paused = False
-            task.generation += 1
+            self._generation += 1
+            task.generation = self._generation
 
     def get(self, task_id: str) -> Task | None:
         with self._lock:
@@ -108,32 +114,41 @@ class Scheduler:
 
     def load(self, path: str) -> None:
         with self._lock:
-            self._tasks = self._store.load(path)
+            tasks = self._store.load(path)
+            for task in tasks.values():
+                self._generation += 1
+                task.generation = self._generation
+            self._tasks = tasks
 
     # ---- 内部 -----------------------------------------------------------------
     def _loop(self) -> None:
         while not self._stopping:
             now = self._clock.now()
             with self._lock:
-                for task in list(self._tasks.values()):
-                    if task.paused or task.id in self._inflight:
-                        continue
-                    if task.next_run <= now:
-                        late = (now - task.next_run).total_seconds()
-                        if late >= self._misfire_grace:
-                            self._inflight.add(task.id)
-                            self._queue.put((task.id, task.generation))
-                        task.next_run = task.trigger.next_after(task.next_run)
+                self._collect_due_locked(now)
             self._clock.sleep(self._tick)
+
+    def _collect_due_locked(self, now: datetime) -> None:
+        for task in list(self._tasks.values()):
+            if task.paused or task.id in self._inflight:
+                continue
+            if task.next_run <= now:
+                late = (now - task.next_run).total_seconds()
+                if late <= self._misfire_grace:
+                    self._inflight.add(task.id)
+                    self._queue.put((task.id, task.generation))
+                # 无论是否执行，错过的触发都合并（coalesce）到 now 之后的下一个时刻；
+                # 超过宽限期只滚动不执行，tick 循环也不会一步步追历史网格补跑。
+                task.next_run = task.trigger.next_after(now)
 
     def _worker(self) -> None:
         while not self._stopping:
             try:
-                task_id, _gen = self._queue.get(timeout=0.05)
+                task_id, gen = self._queue.get(timeout=0.05)
             except queue.Empty:
                 continue
             with self._lock:
                 task = self._tasks.get(task_id)
                 self._inflight.discard(task_id)
-            if task is not None:
+            if task is not None and task.generation == gen:
                 task.fn()
