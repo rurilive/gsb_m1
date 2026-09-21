@@ -1,5 +1,8 @@
-"""snapwatch 现状演示：四类现场各跑一遍，看现在报出来的事件。
-时间戳都用假时钟钉死，好复现，不靠真机的时钟精度。
+"""snapwatch 四类现场演示：原子保存、连写合并、粗时间戳、目录权限瞬断。
+
+时间戳都用假时钟钉死，好复现，不靠真机的时钟精度。事件在静默一个
+debounce 窗口后才发布，所以每个现场里“变化之后”的第一次 poll 只锚定、
+不发布，第二次 poll 才拿到事件。
 """
 
 import os
@@ -18,17 +21,17 @@ def make_file(root, rel, data, clock, stamp=None):
     return path
 
 
-def poll_rounds(watcher, clock, rounds=3, step=1.0):
-    events = []
-    for _ in range(rounds):
-        clock.advance(step)
-        events.extend(watcher.poll())
-    return events
+def settle(watcher, clock, step=1.0):
+    """变化之后的静默期：第一次 poll 锚定，第二次 poll 发布。"""
+    clock.advance(step)
+    watcher.poll()
+    clock.advance(step)
+    return watcher.poll()
 
 
 def show(title, events):
     body = "".join("    %r\n" % event for event in events)
-    print("  %s：报出 %d 条\n%s" % (title, len(events), body), end="")
+    print("  %s：%d 条\n%s" % (title, len(events), body), end="")
 
 
 def scene_atomic_save():
@@ -37,10 +40,11 @@ def scene_atomic_save():
         clock = ManualClock(500.0)
         make_file(root, "notes.txt", b"v1", clock)
         watcher = Watcher(root, fs=SysFS(), clock=clock)
-        poll_rounds(watcher, clock)
+        settle(watcher, clock)
         tmp = make_file(root, "notes.txt.tmp", b"v2", clock)
         os.replace(tmp, os.path.join(root, "notes.txt"))
-        show("保存之后", poll_rounds(watcher, clock))
+        # 净效果只有 notes.txt 被修改，临时文件不报 created/deleted
+        show("保存之后", settle(watcher, clock))
 
 
 def scene_save_storm():
@@ -49,14 +53,13 @@ def scene_save_storm():
         clock = ManualClock(500.0)
         make_file(root, "notes.txt", b"v1", clock)
         watcher = Watcher(root, fs=SysFS(), clock=clock)
-        poll_rounds(watcher, clock)
-        events = []
+        settle(watcher, clock)
         for content in (b"v2", b"v3", b"v4"):
-            clock.advance(1.2)
+            clock.advance(0.1)
             make_file(root, "notes.txt", content, clock)
-            events.extend(watcher.poll())
-        events.extend(poll_rounds(watcher, clock))
-        show("三笔写完", events)
+            watcher.poll()  # 静默期内反复扫，只锚定不发布
+        clock.advance(1.0)
+        show("三笔写完", watcher.poll())
 
 
 def scene_coarse_timestamps():
@@ -64,12 +67,17 @@ def scene_coarse_timestamps():
     with tempfile.TemporaryDirectory() as root:
         clock = ManualClock(500.0)
         make_file(root, "build.log", b"aaaaaaaa", clock)
-        watcher = Watcher(root, fs=SysFS(), clock=clock)
-        poll_rounds(watcher, clock, rounds=2, step=0.2)
+        watcher = Watcher(root, fs=SysFS(), clock=clock, granularity=1.0)
+        settle(watcher, clock, step=0.2)
         for content in (b"bbbbbbbb", b"cccccccc"):
             clock.advance(0.2)
             make_file(root, "build.log", content, clock, stamp=500.0)
-        show("第二次改写", poll_rounds(watcher, clock, step=0.2))
+        clock.advance(0.1)
+        watcher.poll()  # 窗口内惰性比对内容，第二笔改写被发现但未到期
+        clock.advance(0.2)
+        watcher.poll()
+        clock.advance(0.1)
+        show("静默窗口之后", watcher.poll())
 
 
 class BlockedFS(SysFS):
@@ -93,14 +101,17 @@ def scene_blocked_directory():
             make_file(root, "d0/" + name, b"x", clock)
         filesystem = BlockedFS("d0")
         watcher = Watcher(root, fs=filesystem, clock=clock)
-        poll_rounds(watcher, clock)
+        settle(watcher, clock)
         filesystem.blocked = True
-        show("chmod 之后", poll_rounds(watcher, clock))
+        show("chmod 之后（子树原样保留）", settle(watcher, clock))
+        filesystem.blocked = False
+        make_file(root, "d0/f4.txt", b"y", clock)
+        show("权限恢复后新增一个文件", settle(watcher, clock))
 
 
 def main():
-    for scene in (scene_atomic_save, scene_save_storm, scene_coarse_timestamps,
-                  scene_blocked_directory):
+    for scene in (scene_atomic_save, scene_save_storm,
+                  scene_coarse_timestamps, scene_blocked_directory):
         scene()
         print()
 

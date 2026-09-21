@@ -1,4 +1,9 @@
-"""快照扫描：走一遍目录树，把每个节点的元数据和内容摘要记下来。"""
+"""快照扫描：走一遍目录树，把每个节点的元数据记下来。
+
+扫描只读 stat 元数据，不碰文件内容；内容摘要（digest）在第一次访问时
+惰性计算。读不出来的目录记进 Snapshot.incomplete，调用方可以据此把
+上一轮的子树保留下来，而不是当成整棵子树被删掉。
+"""
 
 import hashlib
 import os
@@ -10,7 +15,7 @@ class Entry:
     """快照里的一个节点，路径是相对 root 的 posix 串。"""
 
     __slots__ = ("path", "is_dir", "mtime_ns", "size", "inode",
-                 "_abs", "_fs", "_digest")
+                 "_abs", "_fs", "_digest", "_state", "_same_meta")
 
     def __init__(self, path, is_dir, mtime_ns, size, inode,
                  abs_path=None, fs=None, digest=None):
@@ -37,9 +42,11 @@ class Entry:
 class Snapshot:
     """一次扫描的结果。"""
 
-    def __init__(self, root):
+    def __init__(self, root, incomplete=()):
         self.root = root
         self.entries = {}
+        # 本轮没能列出内容的目录（相对路径），"" 表示根本身
+        self.incomplete = set(incomplete)
 
     def entry(self, path):
         """相对路径对应的 Entry，没有这个路径时抛 KeyError。"""
@@ -71,6 +78,7 @@ class PollScanner:
         try:
             names = self.fs.scandir(self._abs(rel))
         except OSError:
+            snapshot.incomplete.add(rel)
             return
         for name in names:
             child = name if not rel else rel + "/" + name
@@ -78,12 +86,8 @@ class PollScanner:
                 info = self.fs.stat(self._abs(child))
             except OSError:
                 continue
-            digest = None
-            if not info.is_dir:
-                content = self.fs.read_bytes(self._abs(child))
-                digest = hashlib.sha256(content).hexdigest()
             snapshot.entries[child] = Entry(
                 child, info.is_dir, info.mtime_ns, info.size, info.inode,
-                abs_path=self._abs(child), fs=self.fs, digest=digest)
+                abs_path=self._abs(child), fs=self.fs)
             if info.is_dir:
                 self._walk(child, snapshot)
