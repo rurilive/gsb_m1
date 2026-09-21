@@ -16,14 +16,11 @@ def encode_uvarint(value):
     if value < 0:
         raise ValueError("uvarint 只收非负数: %r" % (value,))
     out = bytearray()
-    while True:
-        byte = value & 0x7F
+    while value > 0x7F:
+        out.append((value & 0x7F) | 0x80)
         value >>= 7
-        if value:
-            out.append(byte | 0x80)
-        else:
-            out.append(byte)
-            return bytes(out)
+    out.append(value)
+    return bytes(out)
 
 
 def decode_uvarint(buf, pos=0):
@@ -39,19 +36,24 @@ def decode_uvarint(buf, pos=0):
         if not byte & 0x80:
             return value, pos
         shift += 7
-        if shift > 63:
+        if shift > 70:
             raise FormatError("varint 超过 64 位")
 
 
 def encode_svarint(value):
     """有符号整数编成 zigzag 加 uvarint。"""
-    return encode_uvarint((value << 1) ^ (value >> 63))
+    if value >= 0:
+        return encode_uvarint(value << 1)
+    return encode_uvarint(((-value) << 1) - 1)
 
 
 def decode_svarint(buf, pos=0):
     """解一个有符号变长整数，返回 (值, 下一个位置)。"""
     code, pos = decode_uvarint(buf, pos)
-    return (code >> 1) ^ -(code & 1), pos
+    value = code >> 1
+    if code & 1:
+        value = -value - 1
+    return value, pos
 
 
 def encode_raw(kind, values):
