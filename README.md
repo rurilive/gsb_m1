@@ -25,3 +25,10 @@
 python3 demo.py
 python3 -m unittest discover -s tests -v
 ```
+
+## 结构说明
+
+- `Cell` 持有原文、换行后的 `lines` 与行高 `height`（`line_at` 取某物理行文本）；`Column` 持有表头 Cell、数据 Cell 列表和列宽，内容/行高都是数据
+- 宽度计算是纯函数 `compute_column_widths(columns)`，不碰全局状态；`_text_width` 的缓存由 `lru_cache` 收口（`cache_clear()` 可清），不再暴露可写的全局 dict
+- 边框是样式表：`STYLES` 里每个 `BorderStyle` 声明竖线、横线字符和 top/mid/bottom 角字符，`rule()` 统一拼横线，加样式只需加一条
+- `render()` 走统一管线：`_build_columns` 切块 → `compute_column_widths` 度量 → `_assemble` 拼装，数据与拼装分离
