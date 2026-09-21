@@ -5,6 +5,7 @@
 """
 
 from verkit.version import compare, parse_version
+from verkit.range import best, match, normalize
 
 LOCKFILE = [
     "1.4.2",
@@ -36,8 +37,13 @@ def main():
     ]:
         print(f"  compare({a}, {b}) = {compare(a, b)}")
 
-    # TODO(区间支持): 实现区间匹配后，在这里用同一批候选版本演示
-    # 按区间文本过滤和 best() 挑选，直观展示哪些版本落在 ^1.2.0 || >=2.0.0 里。
+    print("\n=== 区间匹配（^1.2.0 || >=2.0.0） ===")
+    rng = "^1.2.0 || >=2.0.0"
+    for s in LOCKFILE:
+        mark = "✓" if match(s, rng) else " "
+        print(f"  [{mark}] {s}")
+    print(f"  best({rng}) = {best(LOCKFILE, rng)}")
+    print(f"  normalize('^1.2.0 || ^1.4.0') = {normalize('^1.2.0 || ^1.4.0')}")
 
 
 if __name__ == "__main__":
