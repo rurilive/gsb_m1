@@ -56,8 +56,11 @@ class Span:
 
     @property
     def duration_ms(self):
-        """这次调用的耗时，毫秒。"""
-        return self.end_ms - self.start_ms
+        """这次调用的耗时，毫秒。
+
+        end_ms 小于 start_ms 说明采集端时钟回拨过，耗时按 0 计。
+        """
+        return max(0, self.end_ms - self.start_ms)
 
     def __repr__(self):
         return "Span(%s/%s)" % (self.trace_id, self.span_id)
