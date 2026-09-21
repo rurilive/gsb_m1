@@ -29,7 +29,22 @@
   中间出现读不动的行报 `ValueError`
 - `truncate()` 清空重来，`close()` 关句柄，也支持 `with` 写法
 
+`eventwire/bus.py` 另提供 `OrderedBus(path, window=256, backlog=64, overflow="drop")`：
+
+- `publish(topic, payload, seq=None)` 发全序编号并落 Journal，同号重投幂等
+  丢弃并计数，跳号报 `ValueError`，返回本条编号
+- `subscribe(name, handler, pattern="**", since=None)` 先按序补发窗口内
+  编号大于 `since` 的旧事件再转异步；`since` 老出窗口抛 `WindowExpired`，
+  不静默跳过
+- 每个订阅者一条有界队列加专属线程，慢订阅者只积压自己；超限按
+  `overflow` 丢并计数（`"drop"`）或断开（`"disconnect"`）
+- `stats()` 报水位、窗口下限与各订阅者的投递、丢弃、积压、状态；
+  `wait_idle(timeout)` 等所有订阅者排空
+- 重开同一文件编号接着水位走，窗口只留最近 `window` 条，积压不超
+  `backlog`，都不随时间涨
+
 发布是全同步的：某一个订阅者慢，发布方和排在后面的订阅者都得等它。
+（`SyncBus` 如此；`OrderedBus` 的异步分发不受此限。）
 
 ## 目标
 

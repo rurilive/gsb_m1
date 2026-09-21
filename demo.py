@@ -3,14 +3,15 @@
 第一段：层级主题的模式匹配。
 第二段：Journal 追加与读回，含末尾残行。
 第三段：SyncBus 的顺序同步分发，以及慢订阅者拖住全局。
-第四段：预留的顺序与重放演示位子（见文末注释）。
+第四段：OrderedBus 的编号落盘、重放、背压与重启续号。
 """
 
 import os
 import tempfile
+import threading
 import time
 
-from eventwire import Journal, SyncBus, matches
+from eventwire import Journal, OrderedBus, SyncBus, WindowExpired, matches
 
 MATCH_CASES = [
     ("gateway.*", "gateway.retry"),
@@ -68,12 +69,55 @@ def main():
         for name in bus.subscriber_names():
             print(f"  {name} 收到: {seen.get(name, [])}")
 
-    # TODO(顺序与重放): OrderedBus 落地后，在这里加一段演示：
-    # 1) 发布拿到单调编号并落盘，同一个编号再投一次被幂等丢掉
-    # 2) 新订阅者按 since 重放窗口内的历史，窗口外的老编号报过期
-    # 3) 慢订阅者只让自己积压，发布方和快订阅者不受影响，
-    #    积压超限后从 stats() 里读到丢弃计数或断开状态
-    # 4) 关掉再打开同一个文件，编号接着水位走，不重发也不跳号
+        print()
+        print("=== OrderedBus 编号、重放与背压 ===")
+        ordered_path = os.path.join(tmp, "ordered.jsonl")
+        bus = OrderedBus(ordered_path, window=4, backlog=2, overflow="drop")
+        for seq in range(1, 7):
+            assigned = bus.publish("order.paid", {"id": seq})
+            print(f"  发布拿到编号 {assigned}")
+        dup = bus.publish("order.paid", {"id": 3}, seq=3)
+        print(f"  同号重投 {dup} 被幂等丢掉，"
+              f"重复计数 {bus.stats()['duplicates']}")
+
+        replayed = {}
+        bus.subscribe("replay", make_handler(replayed, "replay"), since=4)
+        bus.wait_idle()
+        print(f"  since=4 补发窗口内旧事件: {replayed['replay']}")
+        try:
+            bus.subscribe("too-old", make_handler({}, "too-old"), since=0)
+        except WindowExpired as failure:
+            print(f"  since=0 已滚出窗口: {failure}")
+
+        slow_seen = []
+        release = threading.Event()
+
+        def slow_handler(topic, payload):
+            release.wait(2)
+            slow_seen.append(payload["id"])
+
+        bus.subscribe("slow", slow_handler)
+        fast_seen = {}
+        bus.subscribe("fast", make_handler(fast_seen, "fast"))
+        started = time.perf_counter()
+        for seq in range(7, 12):
+            bus.publish("order.paid", {"id": seq})
+        print(f"  连发 5 条只花 {time.perf_counter() - started:.3f} 秒，"
+              f"慢的 slow 不拖发布方")
+        release.set()
+        bus.wait_idle()
+        stats = bus.stats()
+        print(f"  水位 {stats['watermark']}，窗口下限 {stats['window_floor']}，"
+              f"slow 投 {stats['subscribers']['slow']['delivered']} "
+              f"丢 {stats['subscribers']['slow']['dropped']}")
+        bus.close()
+
+        print()
+        print("=== 重启续号 ===")
+        bus = OrderedBus(ordered_path, window=4, backlog=2)
+        print(f"  重开同一文件，下一条编号 {bus.publish('order.paid', {'id': 99})}，"
+              f"不重发不跳号")
+        bus.close()
 
 
 if __name__ == "__main__":
