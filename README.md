@@ -48,3 +48,14 @@ python3 demo.py                          # 发放续期归还、脚本对拍、�
 python3 -m unittest discover -s tests -v # 行为基线测试
 python3 -m leasekeeper.bench             # 连环吞吐对比表
 ```
+
+## 实现说明
+
+- 新能力全在新模块：`durable.py` 的 `DurableLeaseKeeper` 与 `LeaseKeeper` 同构，老调用与 `tests/` 基线一字未动。
+- 过期只认注入钟：`durable.py` 在内部对读数做单调钳制，时钟被往回拨时沿用上一次读到的时刻，旧租约不复活。
+- `grant(..., request_id=)` 幂等：同标识（含并发重试、撞车请求、跨重启）拿回同一份结果；标识串用不同参数直接报错。
+- grant/deny/release 先写 `journal.py` 的只追加日志（文件版每条 fsync）；`recover` 重放续号，未到期未归还的租约续活，过期即回收。
+- 续期不进日志（万次/秒路径零磁盘），崩溃后按发号时的原始到期判活：宁可提前回收，同一资源也不会有两份活租约。
+- 记号跨重启只增；每资源历史最大记号可经 `seal_guard` 灌回 `FenceGuard`，旧纪元记号被存储层挡下。
+- `wheel.py` 把到期时刻量化进秒级槽位 + 非空槽小堆，`sweep` 开销只跟当轮到期条数走，与活跃总量无关。
+- `script.py` 新增 `make_durable_script`/`drive_durable`/`model_durable`，把并发重试与崩溃重放编进确定性脚本对拍。
