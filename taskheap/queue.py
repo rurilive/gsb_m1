@@ -4,7 +4,7 @@
 失败用 release 放回等下一轮。堆在 heap.py，本模块只管状态流转和对外接口。
 """
 
-from .heap import HeapEntry, IndexedHeap
+from .heap import IndexedHeap
 
 STATE_QUEUED = "queued"
 STATE_RUNNING = "running"
@@ -32,30 +32,31 @@ class TaskQueue:
 
     def __init__(self):
         self._heap = IndexedHeap()
-        self._records = {}
+        self._queued = {}
         self._running = {}
+        self._next_seq = 1
 
     def push(self, task_id, prio):
         """提交一个任务，prio 越小越先执行。"""
-        if task_id in self._records:
+        if task_id in self._queued or task_id in self._running:
             raise ValueError("task already in queue: %r" % (task_id,))
         _check_prio(prio)
-        self._records[task_id] = TaskRecord(task_id, prio)
-        self._heap.push(prio, task_id)
+        seq = self._next_seq
+        self._next_seq += 1
+        record = TaskRecord(task_id, prio)
+        entry = self._heap.push(prio, task_id, seq)
+        self._queued[task_id] = (record, entry)
 
     def pop(self):
         """弹出下一个该执行的任务号；没有可弹的任务时返回 None。"""
-        while True:
-            entry = self._heap.pop_min()
-            if entry is None:
-                return None
-            record = self._records.get(entry.task_id)
-            if record is None:
-                # 任务号已经不在册，这条记录没有主人，丢掉继续。
-                continue
-            record.state = STATE_RUNNING
-            self._running[entry.task_id] = record
-            return entry.task_id
+        entry = self._heap.pop_min()
+        if entry is None:
+            return None
+        task_id = entry.task_id
+        record, _entry = self._queued.pop(task_id)
+        record.state = STATE_RUNNING
+        self._running[task_id] = (record, entry)
+        return task_id
 
     def pop_batch(self, count):
         """连续弹出至多 count 个任务，按弹出顺序返回任务号列表。"""
@@ -69,29 +70,32 @@ class TaskQueue:
 
     def done(self, task_id):
         """执行成功的任务收尾，之后不再回到队列。"""
-        record = self._records.get(task_id)
-        if record is None or record.state != STATE_RUNNING:
+        slot = self._running.get(task_id)
+        if slot is None:
             raise KeyError(task_id)
-        del self._records[task_id]
         del self._running[task_id]
 
     def release(self, task_id):
         """执行失败的任务放回队列，等下一轮再被弹出。"""
-        record = self._records.get(task_id)
-        if record is None:
+        slot = self._running.pop(task_id, None)
+        if slot is None:
             raise KeyError(task_id)
+        record, entry = slot
         record.state = STATE_QUEUED
-        self._running.pop(task_id, None)
-        self._heap.restore(HeapEntry(record.prio, task_id))
+        self._queued[task_id] = (record, entry)
+        self._heap.restore(entry)
 
     def update_priority(self, task_id, prio):
         """调整一个任务的优先级，随后按新优先级参与排队。"""
         _check_prio(prio)
-        record = self._records.get(task_id)
-        if record is None:
+        slot = self._queued.get(task_id)
+        if slot is None:
             raise KeyError(task_id)
-        self._heap.push(prio, task_id)
+        record, entry = slot
+        if prio == record.prio:
+            return
         record.prio = prio
+        self._heap.change_priority(entry, prio)
 
     def pending(self):
         """排队中的任务号，按下一轮弹出的顺序排列。"""
@@ -104,12 +108,11 @@ class TaskQueue:
 
     def queued(self, task_id):
         """这个任务是不是正排着队等弹出。"""
-        record = self._records.get(task_id)
-        return record is not None and record.state == STATE_QUEUED
+        return task_id in self._queued
 
     def size(self):
         """排队中的记录数，不含执行中的任务。"""
-        return self._heap.size()
+        return len(self._queued)
 
     def capacity(self):
         """后备存储的槽位数，给内存观察用。"""
