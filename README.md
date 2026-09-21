@@ -29,3 +29,11 @@
 python3 demo.py                          # 落库与投递演示
 python3 -m unittest discover -s tests -v # 行为基线测试
 ```
+
+## 实现说明
+
+- 退避：第 n 次连续失败后，下次可投递时刻 = 失败时刻 + `min(cap, base * factor ** (n - 1))`，默认 base=1s、factor=2、cap=60s，全部用注入时钟计算，不 sleep
+- 死信：连续失败达 `max_attempts`（默认 5）即置 `dead`，移出待发队列、不再投递，可经 `store.dead()` 查看
+- 租约：投递前 `claim(seq, owner, now, ttl)` 认领，租约未过期其他中继认领失败，同一条不会被并发重投；失败或成功即释放，租约到期自动失效
+- 顺序：同一聚合键严格按 seq 升序投递，前一条未成功（退避中、被他人租用或刚失败）时同键后续本轮一律跳过；不同聚合键互不阻塞
+- 至少一次：成功才 `mark_sent`，崩溃或租约丢失可能导致重复投递，消费方需幂等
