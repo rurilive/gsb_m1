@@ -22,6 +22,22 @@
   `(doc_id, old_text, new_text)`，新增时 `old_text` 为 None，删除时 `new_text`
   为 None，对未收录主键的删除不回调
 
+`docbase/rank.py` 提供 `BM25Index`，在库上按相关度出结果：
+
+- 构造 `BM25Index(lib, k1=1.5, b=0.75)` 时把库里已有文档收进来建倒排，
+  并通过 `subscribe` 跟随后续增删：N、df、平均长度同步更新，删掉的
+  文档不再出现，重插按新文本重算；单篇增删只动该文档涉及的倒排表项，
+  开销不随库规模涨
+- 排序切词走 `rank_tokens`，与 `tokens` 不同：中文段取相邻二字组
+  （“支付超时” → 支付 / 付超 / 超时），段只剩一字时保留该字；
+  英文数字仍按段切并转小写；查询词先按此口径切再去重
+- `search(query, k)` 按标准 BM25 打分取前 k 条 `(doc_id, score)`：
+  IDF 取 `ln((N-df+0.5)/(df+0.5)+1)`，同分按主键字典序；空查询、
+  未收录的词、非正 k 都给空列表
+- top-k 用 WAND 剪枝：按各词历史最大 tf 算贡献上界，只给有机会进
+  前 k 的文档打分，结果与全量暴力打分一致；`stats()` 给篇数、词表
+  大小与累计的 `searches` / `scored`（打分次数）
+
 ## 目标
 
 见任务描述。约束：
@@ -32,6 +48,6 @@
 ## 运行
 
 ```bash
-python3 demo.py                          # 写入、覆盖、查询与删除演示
-python3 -m unittest discover -s tests -v # 行为基线测试
+python3 demo.py                          # 写入、覆盖、查询、排序与删除演示
+python3 -m unittest discover -s tests -v # 行为基线 + BM25 对拍与性能测试
 ```
