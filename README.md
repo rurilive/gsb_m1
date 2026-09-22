@@ -22,6 +22,28 @@
   `(doc_id, old_text, new_text)`，新增时 `old_text` 为 None，删除时 `new_text`
   为 None，对未收录主键的删除不回调
 
+`docbase/rank.py` 提供 `BM25Index`，按相关度出结果：
+
+- `BM25Index(library, k1=1.5, b=0.75)` 构造时收下整个库，并挂回调跟随
+  后续增删改；`close()` 摘回调
+- `search(query, k=10)` 给前 k 条 `(doc_id, 分数)`，分数降序、同分按 id
+  字典序；只给至少含一个查询词的文档打分
+- `stats()` 给篇数、词表大小、平均词数，以及累计的 `searches` / `scored`
+  （实际打分次数）
+
+实现口径：
+
+- 切词用 `rank_tokens`：中文段取相邻二字组，段长为一时保留单字；英文
+  数字按段切并转小写；查询词先去重再打分
+- 打分是标准 BM25：`idf = ln((N - df + 0.5) / (df + 0.5) + 1)`，词项
+  贡献 `idf * tf * (k1 + 1) / (tf + k1 * (1 - b + b * dl / avgdl))`
+- 倒排、文档长度、词频直方图随库的回调逐篇增量维护，N、df、平均长度
+  即时跟上，单篇增删开销不随库规模上涨；删除的文档立刻从倒排里摘掉，
+  覆盖写按新文本重算
+- 查询按 idf 从高到低处理倒排表，用各词项的分数上界（取该词最大词频、
+  文档长度取下界）估出未打分文档的总分上限，够不着当前第 k 名就整批
+  跳过，名次与分数和全量暴力打分完全一致
+
 ## 目标
 
 见任务描述。约束：
@@ -32,6 +54,6 @@
 ## 运行
 
 ```bash
-python3 demo.py                          # 写入、覆盖、查询与删除演示
-python3 -m unittest discover -s tests -v # 行为基线测试
+python3 demo.py                          # 写入、覆盖、查询、排序与删除演示
+python3 -m unittest discover -s tests -v # 行为基线 + BM25 对拍测试
 ```

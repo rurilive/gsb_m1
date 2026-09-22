@@ -1,11 +1,18 @@
-"""docbase 现状演示。
+"""docbase 演示。
 
 第一段：写入、覆盖与主键读取。
 第二段：关键词精确匹配查询与统计。
-第三段：按相关度排序的演示位子（见文末注释）。
+第三段：BM25 相关度排序。
+第四段：删除文档，名次随之变化。
 """
 
-from docbase import DocLibrary
+from docbase import BM25Index, DocLibrary
+
+
+def show_ranked(index, query, k):
+    print("  ranked(%r, k=%d)" % (query, k))
+    for doc_id, score in index.search(query, k):
+        print("    %-8s %.4f" % (doc_id, score))
 
 
 def main():
@@ -28,14 +35,20 @@ def main():
     print("  search(gateway)   ->", lib.search("gateway"))
     print("  stats ->", lib.stats())
 
-    print("=== 相关度排序（待补） ===")
-    # 演示位子：docbase/rank.py 就位后，这里换成按分数取前 k 篇，
-    # 并演示增删文档之后名次与统计量的变化。
+    print("=== 相关度排序 ===")
+    index = BM25Index(lib)
+    show_ranked(index, "支付 超时", 3)
+    show_ranked(index, "gateway timeout", 3)
+    print("  index stats ->", index.stats())
 
     print("=== 删除 ===")
     print("  remove(kb-002) ->", lib.remove("kb-002"))
     print("  ids ->", lib.ids())
     print("  stats ->", lib.stats())
+
+    print("=== 删除后的相关度排序 ===")
+    show_ranked(index, "gateway timeout", 3)
+    print("  index stats ->", index.stats())
 
 
 if __name__ == "__main__":
