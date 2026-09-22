@@ -1,12 +1,15 @@
-"""jqplan 现状演示。
+"""jqplan 演示。
 
 第一段：三张表按声明顺序执行，看结果和探测行数。
 第二段：同一条查询换一个手写的执行顺序，结果一样，探测行数差很多。
 第三段：看一眼统计快照。
-末尾留了规划器的演示位子（见文末注释）。
+第四段：规划器拿统计挑顺序，跟声明顺序、穷举最优比探测行数；
+再看十一张表的规划耗时，以及统计过期时计划怎么退化。
 """
 
+import itertools
 import random
+import time
 
 from jqplan.engine import Engine, Plan, Query
 from jqplan.planner import Planner
@@ -67,9 +70,40 @@ def main():
     print(f"  过期表: {stats.stale([users, orders, items])}")
     print(f"  规划器默认计划: {Planner().plan(query).order}")
 
-    # TODO(连接顺序规划): 代价规划落地后，在这里加一段演示：
-    # 让 Planner 拿着上面的统计挑顺序，跟手写顺序、穷举最优比探测行数，
-    # 再拿十几张表看一眼规划耗时，以及统计过期时计划怎么退化。
+    print("=== 代价规划 ===")
+    planner = Planner()
+    planned = engine.execute_plan(query, planner.plan(query, stats))
+    print(f"  规划顺序: {planned.order}")
+    print(f"  结果 {len(planned.rows)} 行，探测 {planned.rows_scanned} 行")
+    best = min(
+        (engine.execute_plan(query, Plan(perm)).rows_scanned, perm)
+        for perm in itertools.permutations(query.table_names())
+    )
+    print(f"  穷举最优: {best[1]} 探测 {best[0]} 行")
+    print(f"  声明顺序探测 {by_declared.rows_scanned} 行，手写顺序 {by_manual.rows_scanned} 行")
+
+    print("=== 十一张表的规划耗时 ===")
+    many = []
+    for i in range(11):
+        table = Table(f"t{i}", ["k", "v"])
+        table.insert_many([(k, k * (i + 1)) for k in range(20 + i * 5)])
+        many.append(table)
+    big_query = Query(
+        list(reversed(many)),
+        [(f"t{i}", "k", f"t{i + 1}", "k") for i in range(10)],
+    )
+    big_stats = Stats.collect(many)
+    start = time.monotonic()
+    big_plan = planner.plan(big_query, big_stats)
+    elapsed = time.monotonic() - start
+    print(f"  规划顺序: {big_plan.order}")
+    print(f"  耗时 {elapsed * 1000:.1f} ms")
+
+    print("=== 统计过期退回声明顺序 ===")
+    items.insert(("s9999", 9999, 1))
+    fallback = planner.plan(query, stats)
+    print(f"  过期表: {stats.stale([users, orders, items])}")
+    print(f"  退回计划: {fallback.order}")
 
     print("=== 完 ===")
 
