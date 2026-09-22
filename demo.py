@@ -1,12 +1,13 @@
-"""resolvcache 现状演示。
+"""resolvcache 行为演示。
 
 第一段：命中、过期与上游失败。
-第二段：多个线程同时查同一个域名，数一数上游被打了几次。
-第三段：预留的新行为演示位子（见文末注释）。
+第二段：多个线程同时查同一个域名，单飞只放一路回源。
+第三段：本轮新行为——负缓存、后台预刷新与失败顶旧值。
 第四段：跟直连上游对拍，看随机序列下的返回与上游调用数。
 """
 
 import threading
+import time
 
 from resolvcache.cache import ResolverCache
 from resolvcache.clock import ManualClock
@@ -59,8 +60,55 @@ def show_concurrent_same_name():
     print("  上游调用数:", upstream.stats()["calls"])
 
 
-# TODO(本轮改造): 新行为的演示位子留在这儿，加在下面这段之前，
-# 输出要能一眼看出这轮改了什么。
+def _wait_for(predicate, timeout=2.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline and not predicate():
+        time.sleep(0.001)
+    return predicate()
+
+
+def show_negative_cache():
+    print("=== 负缓存：上游抖动不再打穿 ===")
+    upstream = FakeUpstream({"db.svc.internal": ("10.0.0.40", 30.0)})
+    clock = ManualClock(3000.0)
+    cache = ResolverCache(upstream, clock=clock, negative_ttl=5.0)
+    upstream.set_failing("db.svc.internal")
+    for _ in range(5):
+        try:
+            cache.lookup("db.svc.internal")
+        except UpstreamError:
+            pass
+    print("  连续查 5 次失败域名，上游调用数:", upstream.stats()["calls"])
+    clock.advance(6.0)
+    try:
+        cache.lookup("db.svc.internal")
+    except UpstreamError:
+        pass
+    print("  负缓存 5 秒过期后再查，上游调用数:", upstream.stats()["calls"])
+
+
+def show_refresh_and_stale():
+    print("=== 后台预刷新 / 失败拿旧值顶到硬过期 ===")
+    upstream = FakeUpstream({"api.svc.internal": ("10.0.0.10", 20.0)})
+    clock = ManualClock(4000.0)
+    cache = ResolverCache(upstream, clock=clock)
+    print("  首次 lookup ->", cache.lookup("api.svc.internal"))
+    upstream.set_record("api.svc.internal", "10.0.0.11", 20.0)
+    clock.advance(11.0)  # 有效期 20 秒，已过半
+    print("  过半后命中先返回旧值 ->", cache.lookup("api.svc.internal"))
+    _wait_for(lambda: cache.lookup("api.svc.internal") == "10.0.0.11")
+    print("  后台刷新落地后再查 ->", cache.lookup("api.svc.internal"))
+    upstream.set_failing("api.svc.internal")
+    clock.advance(11.0)  # 又过半，这次后台刷新会失败
+    print("  上游挂了，过半后仍返回旧值 ->", cache.lookup("api.svc.internal"))
+    _wait_for(lambda: cache.stats()["errors"] == 1)
+    clock.advance(5.0)
+    print("  硬过期前一直是旧值 ->", cache.lookup("api.svc.internal"))
+    clock.advance(6.0)  # 过了硬过期，按未命中重新回源
+    try:
+        cache.lookup("api.svc.internal")
+    except UpstreamError as exc:
+        print("  硬过期后回源仍失败:", exc)
 
 
 def show_diff():
@@ -74,6 +122,8 @@ def show_diff():
 def main():
     show_hit_and_expiry()
     show_concurrent_same_name()
+    show_negative_cache()
+    show_refresh_and_stale()
     show_diff()
 
 
